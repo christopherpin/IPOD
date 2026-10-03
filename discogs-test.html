@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Discogs check</title>
+<style>
+html,body{margin:0;background:#0b0b0c;color:#e9e9ea;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px}
+.row{padding:12px 0;border-bottom:1px solid #222;display:flex;gap:12px}
+.row img{width:64px;height:64px;object-fit:cover;flex:none;background:#222}
+.row b{font-weight:600}.row a{color:#1ed760}.m{color:#8a8a90}
+form{display:grid;gap:8px;margin:0 0 16px}
+input,button{font:inherit;padding:8px 10px;border-radius:6px;border:1px solid #333;background:#151517;color:inherit}
+button{background:#1ed760;color:#000;border:0;cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+<form id="f" hidden>
+  <p class="m">Paste the Consumer Key and Consumer Secret from your Discogs app. They stay in this browser.</p>
+  <input id="k" placeholder="Consumer Key" autocomplete="off">
+  <input id="s" placeholder="Consumer Secret" autocomplete="off">
+  <button>Save and look up</button>
+</form>
+<div id="out"></div>
+</main>
+<script src="discogs.js"></script>
+<script>
+const albums = [
+  ["OK Computer", "Radiohead"], ["Blue", "Joni Mitchell"], ["Abbey Road (Remastered 2019)", "The Beatles"],
+  ["Rumours", "Fleetwood Mac"], ["Nevermind (Remastered)", "Nirvana"], ["Kind Of Blue (Legacy Edition)", "Miles Davis"],
+  ["To Pimp A Butterfly", "Kendrick Lamar"], ["Random Access Memories", "Daft Punk"], ["Loveless", "my bloody valentine"]
+].map(([name, artist], i) => ({ id: "test" + i, name, artists: [{ name: artist }] }));
+const out = document.getElementById("out"), form = document.getElementById("f");
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+form.onsubmit = e => {
+  e.preventDefault();
+  Discogs.setCredentials(document.getElementById("k").value, document.getElementById("s").value);
+  run();
+};
+function run(){
+  if (!Discogs.ready()){ form.hidden = false; return; }
+  form.hidden = true;
+  out.innerHTML = `<p class="m">Looking up a few well-known albums on Discogs (about one a second)…</p>`;
+  Discogs.lookupAll(albums, (a, d) => {
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = d
+      ? `<img src="${esc(d.thumb)}" alt=""><div><b>${esc(a.name)}</b> <span class="m">· ${esc(a.artists[0].name)}</span><br>
+         <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.artist)} – ${esc(d.title)}</a> <span class="m">· ${esc(d.year)} · ${esc(d.kind)}</span><br>
+         Genres: ${esc(d.genres.join(", "))}<br>Styles: ${esc(d.styles.join(", "))}<br>Labels: ${esc(d.labels.slice(0, 4).join(", "))}</div>`
+      : `<div><b>${esc(a.name)}</b> <span class="m">· no Discogs match (or the key didn't work)</span></div>`;
+    out.appendChild(row);
+  });
+}
+run();
+</script>
+</body>
+</html>
