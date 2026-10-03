@@ -15,7 +15,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .setup input,.setup button{font:inherit;color:inherit;border-radius:999px;padding:10px 16px;border:1px solid #2a2a2e;background:var(--tile)}
 .setup button{background:var(--accent);color:#04170a;border-color:var(--accent);font-weight:600;cursor:pointer}
 .setup p{margin:0;color:var(--muted);font-size:12px;text-align:center}
-.hidden{display:none}
+.hidden{display:none !important}
 
 /* view switcher */
 .views{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:20;display:flex;gap:2px;padding:3px;border-radius:999px;background:rgba(22,22,24,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
@@ -132,6 +132,8 @@ const better = (x, y) => isReissue(x.name) !== isReissue(y.name) ? !isReissue(x.
 function add(list){
   for (const a of list){
     if (!a || !a.id || seen.has(a.id)) continue;
+    // albums, EPs and compilations only: Spotify calls EPs "singles" too, but a real single has 1 to 3 tracks
+    if (a.album_type === "single" && (a.total_tracks || 0) <= 3) continue;
     seen.add(a.id);
     const imgs = a.images || [];
     const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url;
@@ -200,10 +202,11 @@ async function load(){
 /* ---------- original release years ---------- */
 // Spotify dates a reissue by the reissue ("Remastered 2019"); a year in the title
 // ("On Guitar 1955-1962") wins when it's earlier.
-const REISSUE = /remaster|deluxe|edition|anniversary|expanded|reissue|version|mono|stereo|bonus|re-?mix|legacy|collector/i;
+const REISSUE = /remaster|deluxe|edition|anniversary|expanded|reissue|version|mono|stereo|bonus|re-?mix|legacy|collector|explicit|clean|special|super|complete|definitive|platinum|extended/i;
 function cleanTitle(t){
   return t.replace(/\s*[(\[]([^)\]]*)[)\]]/g, (m, inner) => REISSUE.test(inner) ? "" : m)
-          .replace(/\s+[-\u2013\u2014:]\s+[^-\u2013\u2014:]*$/, m => REISSUE.test(m) ? "" : m).trim();
+          .replace(/\s+[-\u2013\u2014:]\s+[^-\u2013\u2014:]*$/, m => REISSUE.test(m) ? "" : m)
+          .replace(/\s+(super\s+)?(deluxe|expanded|remastered)(\s+(edition|version))?$/i, "").trim();
 }
 function titleYear(t){
   const c = cleanTitle(t);
@@ -366,8 +369,17 @@ $("#toTop").onclick = () => {
   const { id, d } = menuFor;
   closeMenu();
   const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
-  LS.set("order." + d, [id, ...ranked(d, list).map(a => a.id).filter(x => x !== id)]);
-  showDecade(d, true);
+  const before = ranked(d, list).map(a => a.id);
+  LS.set("order." + d, [id, ...before.filter(x => x !== id)]);
+  if (!isRanked(d)) return; // release order on screen: the ranking changes quietly, nothing moves
+  // stay where you are: the albums above it each slide down one place, so scroll down one place too
+  const moved = before.indexOf(id) > 0;
+  for (const c of dec.querySelectorAll(`.col[data-decade="${d}"]`)){
+    const tiles = c.querySelector(".tiles"), step = moved ? tiles.firstElementChild.offsetHeight + 4 : 0, top = c.scrollTop;
+    fillTiles(tiles, d, list);
+    c.scrollTop = top + step; expected.set(c, c.scrollTop);
+  }
+  colTop[d] = (colTop[d] || 0) + (moved ? 1 : 0) * (dec.querySelector(`.col[data-decade="${d}"] .tiles img`).offsetHeight + 4);
 };
 addEventListener("pointerdown", e => { if (!e.target.closest("#menu")) closeMenu(); }, true);
 addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
