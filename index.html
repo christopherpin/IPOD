@@ -195,7 +195,8 @@ const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const CLIENT_ID = "813caa88dc414f8b8c3dd58c09e55c9f"; // set to your Spotify app's Client ID to skip typing it
 const REDIRECT = location.origin + location.pathname;
-const SCOPES = "user-read-recently-played user-top-read user-library-read user-modify-playback-state";
+// everything the site will ever ask for, requested together so you only approve once
+const SCOPES = "user-read-recently-played user-top-read user-library-read user-modify-playback-state playlist-read-private playlist-modify-private playlist-modify-public";
 
 /* ---------- auth (PKCE) ---------- */
 function b64url(bytes){ return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
@@ -715,6 +716,25 @@ qmenu.onclick = e => {
   LS.set(QUEUE, act === "first" ? [it, ...rest] : rest);
   renderQueue();
 };
+// your "Queue" playlist on Spotify, found or made once and remembered
+async function queuePlaylist(){
+  const known = LS.get("spotifyQueuePlaylist");
+  if (known) return known;
+  const me = await api("/me");
+  for (let path = "/me/playlists?limit=50"; path; ){
+    const j = await api(path);
+    const hit = (j.items || []).find(pl => pl && pl.name === "Queue" && pl.owner?.id === me.id);
+    if (hit){ LS.set("spotifyQueuePlaylist", hit.id); return hit.id; }
+    path = j.next;
+  }
+  const tok = await accessToken();
+  const r = await fetch("https://api.spotify.com/v1/me/playlists", { method: "POST",
+    headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Queue", public: false, description: "Albums sent from the iPod's Queue tab" }) });
+  if (!r.ok) throw new Error("Couldn't Make A Queue Playlist");
+  const pl = await r.json();
+  LS.set("spotifyQueuePlaylist", pl.id); return pl.id;
+}
 const spotifyAlbumId = it => ((it?.url || "").match(/open\.spotify\.com\/album\/([A-Za-z0-9]+)/) || [])[1] || null;
 // Adds every track of the album to whatever Spotify is playing on right now, in order.
 // The button itself says how it went, so nothing else pops up.
@@ -723,8 +743,10 @@ async function queueOnSpotify(btn, key){
   const say = text => { if (qmenuFor === key) btn.textContent = text; };
   const id = spotifyAlbumId(queueList().find(x => x.key === key));
   if (!id) return;
-  if (!/user-modify-playback-state/.test(LS.get("token")?.scope || "")){
-    // one-time: Spotify has to be asked again for permission to add to your queue
+  const granted = (LS.get("token")?.scope || "").split(" ");
+  if (!SCOPES.split(" ").every(x => granted.includes(x)) && LS.get("scopesAsked") !== SCOPES){
+    // one-time: Spotify is asked for every permission at once; your sign-in is then kept and renewed
+    LS.set("scopesAsked", SCOPES);
     btn.disabled = true; say("Connecting To Spotify…");
     return startLogin(LS.get("clientId") || CLIENT_ID).catch(() => { btn.disabled = false; say("Couldn't Reach Spotify"); });
   }
@@ -736,14 +758,33 @@ async function queueOnSpotify(btn, key){
       uris.push(...(j.items || []).map(t => t.uri).filter(Boolean));
       path = j.next;
     }
-    for (let i = 0; i < uris.length; i++){
-      const tok = await accessToken();
-      const r = await fetch("https://api.spotify.com/v1/me/player/queue?uri=" + encodeURIComponent(uris[i]), { method: "POST", headers: { Authorization: "Bearer " + tok } });
-      if (r.status === 429){ await sleep((+r.headers.get("Retry-After") || 2) * 1000); i--; continue; } // same track again
-      if (r.status === 404) throw new Error("Open Spotify And Play Something First");
-      if (r.status === 403) throw new Error("Needs Spotify Premium");
-      if (r.status === 401){ const t = LS.get("token"); if (t){ t.scope = ""; LS.set("token", t); } throw new Error("Try Again To Reconnect Spotify"); }
+    const post = async (path, body) => {
+      for (;;){
+        const tok = await accessToken();
+        const r = await fetch("https://api.spotify.com/v1" + path, { method: "POST",
+          headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+        if (r.status === 429){ await sleep((+r.headers.get("Retry-After") || 2) * 1000); continue; }
+        if (r.status === 401){ const t = LS.get("token"); if (t){ t.scope = ""; LS.set("token", t); } throw new Error("Try Again To Reconnect Spotify"); }
+        return r;
+      }
+    };
+    // straight into what's playing when Spotify is open somewhere; otherwise into your "Queue" playlist
+    let i = 0;
+    for (; i < uris.length; i++){
+      const r = await post("/me/player/queue?uri=" + encodeURIComponent(uris[i]));
+      if ((r.status === 404 || r.status === 403) && i === 0) break; // nothing playing, or the player won't take it
       if (!r.ok) throw new Error("Spotify Didn't Answer");
+    }
+    if (i < uris.length){
+      let pid = await queuePlaylist();
+      for (let k = 0; k < uris.length; k += 100){
+        let r = await post(`/playlists/${pid}/items`, { uris: uris.slice(k, k + 100) });
+        if (r.status === 404 && k === 0){ LS.del("spotifyQueuePlaylist"); pid = await queuePlaylist(); r = await post(`/playlists/${pid}/items`, { uris: uris.slice(0, 100) }); } // it was deleted: make a new one
+        if (!r.ok) throw new Error("Spotify Didn't Answer");
+      }
+      say("Added To Your Queue Playlist ✓");
+      setTimeout(() => { if (qmenuFor === key) closeQmenu(); }, 1600);
+      return;
     }
     say("Queued On Spotify ✓");
     setTimeout(() => { if (qmenuFor === key) closeQmenu(); }, 1200);
