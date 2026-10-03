@@ -209,7 +209,9 @@ function pantheon(){
   return { slots, queue };
 }
 function savePantheon(p){ LS.set("pantheon.slots", p.slots); LS.set("pantheon.queue", p.queue); LS.del("pantheon"); }
-const byAnyId = id => albums.find(a => a.ids.includes(id));
+// Spotify albums sent from Wax that aren't among your own albums, kept so the Pantheon can show them
+const extras = () => LS.get("pantheon.extra", {});
+const byAnyId = id => albums.find(a => a.ids.includes(id)) || extras()[id];
 const inPantheon = a => { const p = pantheon(); return [...p.slots, ...p.queue].some(id => id && a.ids.includes(id)); };
 function cover(id){
   const a = byAnyId(id);
@@ -393,7 +395,7 @@ async function discogsVinyl(user){
       const src = b.cover_image || b.thumb;
       if (!src || /spacer\.gif/.test(src)) continue;
       const artists = (b.artists || []).map(a => (a.name || "").replace(/\s\(\d+\)$/, "")).join(", ");
-      out.push({ id: "dg" + it.instance_id, src, title: (b.title || "") + " · " + artists });
+      out.push({ id: "dg" + it.instance_id, src, title: (b.title || "") + " · " + artists, album: b.title || "", artist: artists });
     }
   }
   return out;
@@ -426,6 +428,40 @@ $("#waxForm").onsubmit = e => {
   if (!u) return void ($("#waxMsg").textContent = "Type your Discogs username first.");
   LS.set("discogs", u); $("#wax").replaceChildren(); renderWax();
 };
+
+// The Spotify version of a Discogs record, so the Pantheon shows clean Spotify art instead of a
+// photo of the sleeve. Remembered per record (null when Spotify doesn't have it).
+const waxMatches = {};
+function spotifyFor(rec){
+  const known = LS.get("wax.spotify", {});
+  if (rec.id in known) return Promise.resolve(known[rec.id]);
+  return waxMatches[rec.id] ||= findOnSpotify(rec).then(al => {
+    const k = LS.get("wax.spotify", {}); k[rec.id] = al; LS.set("wax.spotify", k);
+    return al;
+  }).finally(() => delete waxMatches[rec.id]);
+}
+async function findOnSpotify(rec){
+  const [t, ...rest] = (rec.title || "").split(" · ");
+  const title = cleanTitle(rec.album ?? t), artist = ((rec.artist ?? rest.join(" · ")).split(", ")[0] || "");
+  const various = /^various$/i.test(artist);
+  const want = norm(title), who = norm(artist);
+  const tries = [`album:"${title}"` + (various ? "" : ` artist:"${artist}"`), title + (various ? "" : " " + artist)];
+  for (const q of tries){
+    const j = await api("/search?type=album&limit=10&q=" + encodeURIComponent(q));
+    const items = (j.albums?.items || []).filter(a => a && (a.images || []).length);
+    const artistOk = a => various || (a.artists || []).some(x => { const n = norm(x.name || ""); return n === who || n.includes(who) || who.includes(n); });
+    const titleOk = a => { const n = norm(cleanTitle(a.name || "")); return n === want || n.startsWith(want) || want.startsWith(n); };
+    const hits = items.filter(a => artistOk(a) && titleOk(a));
+    if (!hits.length) continue;
+    // a full album over a single, and the original over a remaster or deluxe edition
+    const score = a => (a.album_type === "single" ? 2 : 0) + (isReissue(a.name || "") ? 1 : 0);
+    const a = hits.sort((x, y) => score(x) - score(y))[0];
+    const imgs = a.images || [];
+    const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0]).url;
+    return { id: a.id, ids: [a.id], src, title: a.name + " · " + (a.artists || []).map(x => x.name).join(", "), artist: (a.artists || [])[0]?.name || "" };
+  }
+  return null;
+}
 
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax"].includes(LS.get("view")) ? LS.get("view") : "wall";
@@ -575,17 +611,24 @@ let menuFor = null;
 function closeMenu(){ menu.classList.add("hidden"); menuFor = null; }
 const decadeOf = a => a.year ? Math.floor(a.year / 10) * 10 : null;
 document.addEventListener("contextmenu", e => {
-  const tile = e.target.closest("#wall img, #pantheon img, .tiles img");
+  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img");
   if (!tile) return;
   e.preventDefault();
   if (drag) return;
-  const album = albums.find(a => a.id === tile.dataset.id);
+  // a Wax record stands in for its Spotify version, which is looked up straight away
+  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id);
+  if (rec) rec.wax = true;
+  const album = rec || (tile.closest("#pantheon") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
   if (!album) return;
   menuFor = album;
-  const d = decadeOf(album);
+  const d = rec ? null : decadeOf(album);
   menu.querySelector('[data-act="top"]').classList.toggle("hidden", !d);
   menu.querySelector('[data-act="end"]').classList.toggle("hidden", !d);
-  menu.querySelector('[data-act="pantheon"]').textContent = inPantheon(album) ? "Remove From Pantheon" : "Send To Pantheon";
+  const pb = menu.querySelector('[data-act="pantheon"]');
+  pb.disabled = false;
+  const known = rec && LS.get("wax.spotify", {})[rec.id];
+  pb.textContent = (rec ? known && inPantheon(byAnyId(known.id) || known) : inPantheon(album)) ? "Remove From Pantheon" : "Send To Pantheon";
+  if (rec) spotifyFor(rec).catch(() => {});
   menu.classList.remove("hidden");
   const w = menu.offsetWidth, h = menu.offsetHeight;
   menu.style.left = Math.min(e.clientX, innerWidth - w - 4) + "px";
@@ -594,17 +637,33 @@ document.addEventListener("contextmenu", e => {
 menu.onclick = e => {
   const act = e.target.closest("button")?.dataset.act, album = menuFor;
   if (!act || !album) return;
-  closeMenu();
-  if (act === "pantheon"){
-    // new arrivals wait in the queue; removing takes it out of the queue or its place
-    const p = pantheon(), was = inPantheon(album);
-    p.queue = p.queue.filter(id => !album.ids.includes(id));
-    p.slots = p.slots.map(id => id && album.ids.includes(id) ? null : id);
-    if (!was) p.queue.push(album.id);
-    savePantheon(p);
-    if (view === "pantheon") renderPantheon();
+  if (act === "pantheon" && album.wax){
+    const btn = e.target.closest("button");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    spotifyFor(album).then(al => {
+      if (menuFor !== album) return;
+      if (!al){ btn.textContent = "Not Found On Spotify"; return; }
+      closeMenu(); togglePantheon(byAnyId(al.id) || al); // your own copy of it, if you have one
+    }, () => { if (menuFor === album) btn.textContent = "Spotify Didn't Answer"; });
     return;
   }
+  closeMenu();
+  if (act === "pantheon"){ togglePantheon(album); return; }
+  rankEdge(act, album);
+};
+function togglePantheon(album){
+  // new arrivals wait in the queue; removing takes it out of the queue or its place
+  const p = pantheon(), was = inPantheon(album);
+  p.queue = p.queue.filter(id => !album.ids.includes(id));
+  p.slots = p.slots.map(id => id && album.ids.includes(id) ? null : id);
+  if (!was) p.queue.push(album.id);
+  // a Spotify album that isn't one of yours is kept alongside, so the Pantheon can draw it
+  if (!was && !albums.some(a => a.ids.includes(album.id))){ const x = extras(); x[album.id] = album; LS.set("pantheon.extra", x); }
+  savePantheon(p);
+  if (view === "pantheon") renderPantheon();
+}
+function rankEdge(act, album){
   // Send To Top 10 / Send To End: move it to the first or last place in its decade's ranking
   const d = decadeOf(album), id = album.id;
   const list = albums.filter(a => decadeOf(a) === d);
@@ -620,7 +679,7 @@ menu.onclick = e => {
     c.scrollTop = top + step; expected.set(c, c.scrollTop);
     colTop[d] = c.scrollTop;
   }
-};
+}
 addEventListener("pointerdown", e => { if (!e.target.closest("#menu")) closeMenu(); }, true);
 addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
 addEventListener("wheel", closeMenu, { passive: true });
