@@ -115,6 +115,14 @@ body.decade-view{overflow:hidden}
 .qcap{margin-top:6px;padding:0 2px;line-height:1.3;cursor:pointer}
 .qcap div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qcap .sub{color:var(--muted);font-size:12px}
+/* share: a read-only copy of the iPod for other people, saved to share/ in the site */
+.sharebtn{position:fixed;top:14px;right:14px;z-index:15;font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:rgba(22,22,24,.82);border:0;border-radius:999px;padding:9px 14px;cursor:pointer}
+.sharebtn:hover{color:var(--text)}
+body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
+.sharebox{position:fixed;top:50px;right:14px;z-index:15;padding:10px 14px;border-radius:12px;background:rgba(22,22,24,.92);font-size:12px;color:var(--muted);text-align:right}
+.sharebox a{display:block;margin-top:4px;color:var(--rank);text-decoration:none}
+#shareSetup{z-index:25;background:rgba(11,11,12,.94)}
+#shareSetup a{color:var(--rank)}
 </style>
 </head>
 <body>
@@ -136,6 +144,18 @@ body.decade-view{overflow:hidden}
   <div id="qbody"></div>
 </main>
 <main class="ipod hidden" id="ipod"></main>
+<button class="sharebtn hidden" id="shareBtn">Share</button>
+<div class="sharebox hidden" id="shareBox"></div>
+<div class="setup hidden" id="shareSetup">
+  <form id="shareForm">
+    <input id="shareToken" type="password" placeholder="GitHub token" autocomplete="off" spellcheck="false">
+    <button type="submit">Save and Share</button>
+    <p id="shareMsg"></p>
+    <p>Share saves a read-only copy of your iPod to <a href="share/" target="_blank" rel="noopener">your share page</a>. It needs a GitHub token, made once:
+      <a href="https://github.com/settings/personal-access-tokens/new?name=IPOD%20Share&amp;description=Lets%20the%20Share%20button%20update%20the%20shared%20iPod&amp;target_name=christopherpin&amp;expires_in=none&amp;contents=write" target="_blank" rel="noopener">make one here</a>,
+      choose Only select repositories, pick IPOD, then paste it above. It stays in this browser.</p>
+  </form>
+</div>
 <div class="setup hidden" id="waxSetup">
   <form id="waxForm">
     <input id="waxUser" placeholder="Discogs username" autocomplete="off" spellcheck="false">
@@ -409,6 +429,7 @@ function pend(){
 function ready(){
   loaded = true;
   $("#loading").classList.add("hidden");
+  $("#shareBtn").classList.remove("hidden");
   renderWall();
   if (view === "decades") renderDecades();
   if (view === "pantheon") renderPantheon();
@@ -812,6 +833,75 @@ function showIpod(){
   IPod.show($("#ipod"), { albums, clean: cleanTitle,
     playlists: () => [{ name: "Pantheon", albums: pantheon().slots.filter(Boolean).map(byAnyId).filter(Boolean) }] });
 }
+
+/* ---------- share: a read-only copy of the iPod at share/, for other people ---------- */
+// Each Share saves over share/data.json in the site's GitHub repository; share/index.html shows it with
+// ipod.js. Writing to the repository takes a GitHub token, which is kept in this browser only.
+const REPO = "christopherpin/IPOD", SHARE_URL = "https://christopherpin.github.io/IPOD/share/";
+function snapshot(){
+  const slim = a => ({ id: a.id, name: cleanTitle(a.name || (a.title || "").split(" · ")[0]), artist: a.artist || "",
+    year: a.year || null, released: a.released || null, src: a.src });
+  const lib = albums.filter(a => a && a.id && a.src).map(slim);
+  const have = new Set(lib.map(a => a.id)), extra = [], ids = [];
+  for (const id of pantheon().slots){
+    const a = id && byAnyId(id);
+    if (!a || !a.src) continue;
+    if (!have.has(a.id)){ have.add(a.id); extra.push(slim(a)); }
+    ids.push(a.id);
+  }
+  return { shared: new Date().toISOString(), albums: lib, extra, playlists: [{ name: "Pantheon", ids }] };
+}
+async function gh(path, init = {}){
+  const r = await fetch("https://api.github.com/repos/" + REPO + path, { ...init, cache: "no-store",
+    headers: { Authorization: "Bearer " + LS.get("share.token"), Accept: "application/vnd.github+json" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok){ const e = new Error(j.message || ("GitHub error " + r.status)); e.status = r.status; throw e; }
+  return j;
+}
+const base64 = s => { const b = new TextEncoder().encode(s); let out = ""; for (let i = 0; i < b.length; i += 0x8000) out += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(out); };
+async function saveShare(){
+  const path = "/contents/share/data.json", content = base64(JSON.stringify(snapshot()));
+  for (let tries = 0; ; tries++){
+    const sha = await gh(path + "?ref=main").then(j => j.sha, e => { if (e.status === 404) return undefined; throw e; });
+    try{ return await gh(path, { method: "PUT", body: JSON.stringify({ message: "Share the iPod", content, sha, branch: "main" }) }); }
+    catch(e){ if (e.status !== 409 || tries) throw e; } // saved elsewhere in between: try again on top of it
+  }
+}
+let sharing = false;
+async function share(){
+  if (!loaded || sharing) return;
+  if (!LS.get("share.token")) return shareSetup();
+  const btn = $("#shareBtn"), box = $("#shareBox");
+  sharing = true; btn.textContent = "Sharing…"; box.classList.add("hidden");
+  try{
+    await saveShare();
+    const copied = await navigator.clipboard.writeText(SHARE_URL).then(() => true, () => false);
+    box.innerHTML = (copied ? "Shared · link copied" : "Shared") + `<a href="${SHARE_URL}" target="_blank" rel="noopener">${SHARE_URL.replace("https://", "")}</a>`;
+  } catch(e){
+    if (e.status === 401){ LS.del("share.token"); shareSetup("That token didn't work. Make a new one and paste it here."); }
+    else if (e.status === 403 || e.status === 404) shareSetup("That token can't change IPOD. Give it IPOD under Only select repositories, with Contents set to Read and write.");
+    else box.textContent = "Couldn't share: " + e.message;
+  } finally {
+    sharing = false; btn.textContent = "Share";
+    if (box.innerHTML) box.classList.remove("hidden");
+  }
+}
+function shareSetup(msg){
+  $("#shareBox").replaceChildren(); $("#shareBox").classList.add("hidden");
+  $("#shareSetup").classList.remove("hidden"); $("#shareMsg").textContent = msg || ""; $("#shareToken").value = "";
+  $("#shareToken").focus();
+}
+$("#shareBtn").onclick = share;
+$("#shareForm").onsubmit = e => {
+  e.preventDefault();
+  const t = $("#shareToken").value.trim();
+  if (!t) return;
+  LS.set("share.token", t); $("#shareSetup").classList.add("hidden"); share();
+};
+// clicking outside (or Escape) closes the token form and the "Shared" note
+$("#shareSetup").addEventListener("click", e => { if (e.target.id === "shareSetup") e.target.classList.add("hidden"); });
+addEventListener("pointerdown", e => { if (!e.target.closest("#shareBox, #shareBtn")) $("#shareBox").classList.add("hidden"); });
+addEventListener("keydown", e => { if (e.key === "Escape"){ $("#shareSetup").classList.add("hidden"); $("#shareBox").classList.add("hidden"); } });
 
 /* ---------- decades ---------- */
 const dec = $("#decades");

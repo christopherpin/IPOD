@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iPod</title>
+<link rel="stylesheet" href="../ipod.css">
+<style>
+/* The shared, read-only iPod: just the device, filled from the last snapshot saved with Share (data.json).
+   No Spotify login, no tab bar, no editing. */
+:root{ --bg:#0b0b0c; --muted:#8a8a90; }
+html,body{margin:0;background:var(--bg);color:#e9e9ea;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+.ipod{padding:0}
+.hidden{display:none !important}
+.empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+</style>
+</head>
+<body class="ipod-view">
+<main class="ipod hidden" id="ipod"></main>
+<p class="empty hidden" id="empty">Nothing has been shared yet.</p>
+<script src="../ipod.js"></script>
+<script>
+"use strict";
+// a fresh copy every visit, so the latest Share is what people see
+fetch("data.json?t=" + Date.now(), { cache: "no-store" })
+  .then(r => r.ok ? r.json() : null)
+  .catch(() => null)
+  .then(d => {
+    if (!d || !Array.isArray(d.albums)){ document.getElementById("empty").classList.remove("hidden"); return; }
+    const all = new Map([...d.albums, ...(d.extra || [])].map(a => [a.id, a]));
+    const playlists = (d.playlists || []).map(p => ({ name: p.name, albums: (p.ids || []).map(id => all.get(id)).filter(Boolean) }));
+    IPod.show(document.getElementById("ipod"), { albums: d.albums, playlists: () => playlists });
+  });
+</script>
+</body>
+</html>
