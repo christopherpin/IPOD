@@ -35,6 +35,9 @@ body.decade-view{overflow:hidden}
 .col.rank .tiles img{cursor:grab}
 .tiles img.placeholder{opacity:.15}
 .ghost{position:fixed;z-index:30;pointer-events:none;cursor:grabbing;box-shadow:0 18px 40px rgba(0,0,0,.6);transform:scale(1.04);transition:transform .12s}
+.menu{position:fixed;z-index:40;padding:4px;border-radius:8px;background:var(--rank);box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.menu button{display:block;font:600 13px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#000;background:none;border:0;border-radius:5px;padding:10px 14px;cursor:pointer;white-space:nowrap}
+.menu button:hover{background:rgba(0,0,0,.1)}
 .empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
 </style>
 </head>
@@ -49,6 +52,7 @@ body.decade-view{overflow:hidden}
 </div>
 <main class="wall" id="wall"></main>
 <main class="decades hidden" id="decades"></main>
+<div class="menu hidden" id="menu"><button id="toTop">Send To Top 10</button></div>
 <nav class="views hidden" id="views">
   <button data-view="wall">Wall</button>
   <button data-view="decades">Decades</button>
@@ -336,7 +340,10 @@ dec.addEventListener("click", e => {
   const h = e.target.closest(".col h2");
   if (!h) return;
   // switch this decade between release order and your ranking, and go back to the top
-  const d = h.parentElement.dataset.decade, rank = !isRanked(d);
+  const d = h.parentElement.dataset.decade;
+  showDecade(d, !isRanked(d));
+});
+function showDecade(d, rank){
   LS.set("mode." + d, rank ? "rank" : "chrono");
   const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
   for (const c of dec.querySelectorAll(`.col[data-decade="${d}"]`)){
@@ -345,8 +352,35 @@ dec.addEventListener("click", e => {
     c.scrollTop = 0; expected.set(c, 0);
   }
   colTop[d] = 0;
+}
+
+/* right-click an album: Send To Top 10 puts it at #1 of its decade's ranking */
+const menu = $("#menu");
+let menuFor = null;
+function closeMenu(){ menu.classList.add("hidden"); menuFor = null; }
+dec.addEventListener("contextmenu", e => {
+  const tile = e.target.closest(".tiles img");
+  if (!tile) return;
+  e.preventDefault();
+  if (drag) return;
+  menuFor = { id: tile.dataset.id, d: tile.closest(".col").dataset.decade };
+  menu.classList.remove("hidden");
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = Math.min(e.clientX, innerWidth - w - 4) + "px";
+  menu.style.top = Math.min(e.clientY, innerHeight - h - 4) + "px";
 });
-dec.addEventListener("contextmenu", e => { if (e.target.closest(".tiles img")) e.preventDefault(); });
+$("#toTop").onclick = () => {
+  if (!menuFor) return;
+  const { id, d } = menuFor;
+  closeMenu();
+  const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
+  LS.set("order." + d, [id, ...ranked(d, list).map(a => a.id).filter(x => x !== id)]);
+  showDecade(d, true);
+};
+addEventListener("pointerdown", e => { if (!e.target.closest("#menu")) closeMenu(); }, true);
+addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
+addEventListener("wheel", closeMenu, { passive: true });
+addEventListener("blur", closeMenu);
 addEventListener("resize", () => { if (view === "decades") scheduleDecades(); });
 
 /* drag an album up or down its own column */
