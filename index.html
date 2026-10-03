@@ -123,6 +123,7 @@ body.decade-view{overflow:hidden}
   <button data-act="top">Send To Top 10</button>
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
+  <button data-act="queue">Add To Queue</button>
 </div>
 <div class="menu hidden" id="qmenu">
   <button data-act="first">Move To Front</button>
@@ -930,6 +931,9 @@ document.addEventListener("contextmenu", e => {
   pb.disabled = false;
   const known = rec && LS.get("wax.spotify", {})[rec.id];
   pb.textContent = (rec ? known && inPantheon(byAnyId(known.id) || known) : inPantheon(album)) ? "Remove From Pantheon" : "Send To Pantheon";
+  const qb = menu.querySelector('[data-act="queue"]');
+  qb.disabled = false;
+  qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue" : "Add To Queue";
   if (rec) spotifyFor(rec).catch(() => {});
   menu.classList.remove("hidden");
   const w = menu.offsetWidth, h = menu.offsetHeight;
@@ -950,8 +954,18 @@ menu.onclick = e => {
     }, () => { if (menuFor === album) btn.textContent = "Spotify Didn't Answer"; });
     return;
   }
+  if (act === "queue" && album.wax){
+    // the record's Spotify version when there is one, otherwise the record itself
+    const btn = e.target.closest("button");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const add = al => { if (menuFor !== album) return; closeMenu(); toggleQueue(al ? byAnyId(al.id) || al : album); };
+    spotifyFor(album).then(add, () => add(null));
+    return;
+  }
   closeMenu();
   if (act === "pantheon"){ togglePantheon(album); return; }
+  if (act === "queue"){ toggleQueue(album); return; }
   rankEdge(act, album);
 };
 function togglePantheon(album){
@@ -964,6 +978,20 @@ function togglePantheon(album){
   if (!was && !albums.some(a => a.ids.includes(album.id))){ const x = extras(); x[album.id] = album; LS.set("pantheon.extra", x); }
   savePantheon(p);
   if (view === "pantheon") renderPantheon();
+}
+// the same shape the Queue tab's search results use, so an album added from any grid looks the same there
+function queueItem(a){
+  const [t, ...rest] = (a.title || "").split(" · ");
+  const name = a.name || a.album || t, artist = a.artist || (rest.join(" · ").split(", ")[0] || "");
+  const spotify = !a.wax && !String(a.id).startsWith("dg");
+  return { key: resultKey(name, artist), name: cleanTitle(name) || name, artist, year: a.year || null, src: a.src || "",
+    url: spotify ? "https://open.spotify.com/album/" + a.id : (a.url || ""), spotify };
+}
+const inQueue = a => { const k = queueItem(a).key; return queueList().some(x => x.key === k); };
+function toggleQueue(a){
+  const it = queueItem(a), list = queueList(), has = list.some(x => x.key === it.key);
+  LS.set(QUEUE, has ? list.filter(x => x.key !== it.key) : [...list, it]);
+  if (view === "queue") renderQueue();
 }
 function rankEdge(act, album){
   // Send To Top 10 / Send To End: move it to the first or last place in its decade's ranking
