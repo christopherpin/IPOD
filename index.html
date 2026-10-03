@@ -27,8 +27,9 @@ body.decade-view{overflow:hidden}
 .decades{--colw:clamp(150px,44vw,240px);position:fixed;inset:0;display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior:none}
 .decades::-webkit-scrollbar,.col::-webkit-scrollbar{display:none}
 .col{flex:0 0 var(--colw);height:100%;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior-y:contain}
-.col h2{position:sticky;top:0;z-index:2;margin:0;padding:16px 10px 12px;background:var(--bg);text-align:center;white-space:nowrap;overflow:hidden;font:700 26px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;cursor:pointer;user-select:none;transition:color .15s}
-.col h2 span{display:inline-block;transform-origin:center}
+.col h2{position:sticky;top:0;z-index:2;height:54px;margin:0;padding:0;background:var(--bg);overflow:hidden;font:700 26px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;cursor:pointer;user-select:none;transition:color .15s}
+/* the year is stretched a little past every edge of its cell, so the cell clips it slightly on all four sides */
+.col h2 svg{position:absolute;left:-3%;top:-5%;width:106%;height:110%;fill:currentColor;overflow:visible}
 .col.rank h2{color:var(--rank)}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
 .wall img.in{opacity:1}
@@ -488,26 +489,21 @@ function fillTiles(tiles, d, list){
 function column(d, list){
   const col = document.createElement("section");
   col.className = "col" + (isRanked(d) ? " rank" : ""); col.dataset.decade = d;
-  const h = document.createElement("h2"), label = document.createElement("span");
-  label.textContent = d + "s"; h.appendChild(label);
+  const h = document.createElement("h2");
+  h.innerHTML = titleSvg(String(d));
   const tiles = document.createElement("div"); tiles.className = "tiles";
   fillTiles(tiles, d, list);
   col.append(h, tiles);
   return col;
 }
-// stretch each decade title sideways so it spans its column
-function stretchTitles(){
-  const scale = {};
-  for (const span of dec.querySelectorAll(".col h2 span")){
-    const d = span.closest(".col").dataset.decade;
-    if (!(d in scale)){
-      span.style.transform = "";
-      const h = span.parentElement, cs = getComputedStyle(h);
-      const room = h.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-      scale[d] = Math.max(1, room / span.offsetWidth);
-    }
-    span.style.transform = `scaleX(${scale[d]})`;
-  }
+// the decade title is drawn as just the ink of its digits, stretched to fill the title cell
+const inkCtx = document.createElement("canvas").getContext("2d");
+function titleSvg(text){
+  inkCtx.font = '700 26px "Helvetica Neue",Helvetica,Arial,sans-serif';
+  const m = inkCtx.measureText(text);
+  const box = [-m.actualBoundingBoxLeft, -m.actualBoundingBoxAscent,
+    m.actualBoundingBoxLeft + m.actualBoundingBoxRight, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent];
+  return `<svg viewBox="${box.join(" ")}" preserveAspectRatio="none" aria-label="${text}s"><text x="0" y="0">${text}</text></svg>`;
 }
 function renderDecades(){
   const groups = decadeGroups();
@@ -522,7 +518,6 @@ function renderDecades(){
   // enough copies that we can always keep the view inside the second copy and still fill the screen
   const copies = 3 + Math.ceil(dec.clientWidth / setW);
   for (let i = 1; i < copies; i++) dec.appendChild(set());
-  stretchTitles();
   for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
   if (centerNext){
     // put the 2020s (or the latest decade, if there's nothing from the 2020s) in the middle, in the second copy
