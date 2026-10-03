@@ -10,7 +10,7 @@
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
 .wall img{opacity:0;transition:opacity .4s;display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile)}
-.setup{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+.setup{position:fixed;inset:0;z-index:5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
 .setup form{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px}
 .setup input,.setup button{font:inherit;color:inherit;border-radius:999px;padding:10px 16px;border:1px solid #2a2a2e;background:var(--tile)}
 .setup button{background:var(--accent);color:#04170a;border-color:var(--accent);font-weight:600;cursor:pointer}
@@ -55,7 +55,14 @@ body.decade-view{overflow:hidden}
 <main class="wall" id="wall"></main>
 <main class="decades hidden" id="decades"></main>
 <main class="wall hidden" id="pantheon"></main>
-<main class="hidden" id="wax"></main>
+<main class="wall hidden" id="wax"></main>
+<div class="setup hidden" id="waxSetup">
+  <form id="waxForm">
+    <input id="waxUser" placeholder="Discogs username" autocomplete="off" spellcheck="false">
+    <button type="submit">Show my records</button>
+    <p id="waxMsg"></p>
+  </form>
+</div>
 <p class="empty hidden" id="pantheonEmpty">Right-click any album and choose Send To Pantheon.</p>
 <div class="menu hidden" id="menu">
   <button data-act="top">Send To Top 10</button>
@@ -247,6 +254,61 @@ function settleYear(a){
   return a.year !== before;
 }
 const norm = s => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, "and").replace(/[^a-z0-9]+/g, " ").trim();
+/* ---------- wax: the vinyl in your Discogs collection ---------- */
+// The IPOD Discogs app's key and secret (same as discogs.js): they read public data only and
+// can't see or change anyone's account, so the collection must be set to public in Discogs.
+const DISCOGS = "key=RHSqiCtFLCKBYTeUotje&secret=ERZrvUHMFzVXbKQLUQMQylUFJEkzEcuG";
+const WAX = "wax.v1";
+async function discogsVinyl(user){
+  const out = [];
+  for (let page = 1, pages = 1; page <= pages; ){
+    const r = await fetch(`https://api.discogs.com/users/${encodeURIComponent(user)}/collection/folders/0/releases` +
+      `?per_page=100&page=${page}&sort=added&sort_order=desc&${DISCOGS}`);
+    if (r.status === 429){ await sleep(5000); continue; }
+    if (r.status === 404) throw new Error("Couldn't find that Discogs username.");
+    if (r.status === 401 || r.status === 403) throw new Error("That collection is private. In Discogs, open Settings, then Privacy, and make your collection public.");
+    if (!r.ok) throw new Error("Discogs didn't answer. Try again in a minute.");
+    const j = await r.json();
+    pages = j.pagination?.pages || 1; page++;
+    for (const it of j.releases || []){
+      const b = it.basic_information || {};
+      if (!(b.formats || []).some(f => /vinyl/i.test(f.name || ""))) continue; // records only
+      const src = b.cover_image || b.thumb;
+      if (!src || /spacer\.gif/.test(src)) continue;
+      const artists = (b.artists || []).map(a => (a.name || "").replace(/\s\(\d+\)$/, "")).join(", ");
+      out.push({ id: "dg" + it.instance_id, src, title: (b.title || "") + " · " + artists });
+    }
+  }
+  return out;
+}
+let waxRefreshed = false;
+async function renderWax(){
+  const user = LS.get("discogs");
+  const setup = msg => { $("#waxSetup").classList.remove("hidden"); $("#waxUser").value = user || ""; $("#waxMsg").textContent = msg || ""; };
+  if (!user) return setup();
+  $("#waxSetup").classList.add("hidden");
+  const cached = LS.get(WAX);
+  if (cached && cached.user === user){
+    // last visit's records straight away; fetch a fresh list quietly for next time
+    if (!$("#wax").childElementCount) fillGrid($("#wax"), cached.list);
+    if (!waxRefreshed){ waxRefreshed = true; discogsVinyl(user).then(list => LS.set(WAX, { user, list })).catch(() => {}); }
+    return;
+  }
+  $("#loading").classList.remove("hidden");
+  try {
+    const list = await discogsVinyl(user);
+    LS.set(WAX, { user, list }); waxRefreshed = true;
+    if (view === "wax") fillGrid($("#wax"), list);
+  } catch(e){ if (view === "wax") setup(e.message); }
+  finally { $("#loading").classList.add("hidden"); }
+}
+$("#waxForm").onsubmit = e => {
+  e.preventDefault();
+  const u = $("#waxUser").value.trim();
+  if (!u) return void ($("#waxMsg").textContent = "Type your Discogs username first.");
+  LS.set("discogs", u); $("#wax").replaceChildren(); renderWax();
+};
+
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
@@ -254,7 +316,8 @@ function setView(v){
   $("#wall").classList.toggle("hidden", v !== "wall");
   $("#decades").classList.toggle("hidden", v !== "decades");
   $("#pantheon").classList.toggle("hidden", v !== "pantheon");
-  $("#wax").classList.toggle("hidden", v !== "wax"); // Wax: page still to be designed
+  $("#wax").classList.toggle("hidden", v !== "wax");
+  if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades") renderDecades();
