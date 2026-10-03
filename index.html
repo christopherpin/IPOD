@@ -24,7 +24,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
     <input id="clientId" placeholder="Spotify Client ID" autocomplete="off" spellcheck="false">
     <button type="submit">Connect Spotify</button>
     <p id="msg"></p>
-    <p>Get a Client ID: open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener" style="color:var(--accent)">developer.spotify.com/dashboard</a>, create an app, tick Web API, and add the Redirect URI <b id="redir"></b>. Then copy the app's Client ID here.</p>
+    <p id="help">Get a Client ID: open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener" style="color:var(--accent)">developer.spotify.com/dashboard</a>, create an app, tick Web API, and add the Redirect URI <b id="redir"></b>. Then copy the app's Client ID here.</p>
   </form>
 </div>
 <main class="wall" id="wall"></main>
@@ -38,6 +38,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const CLIENT_ID = ""; // set to your Spotify app's Client ID to skip typing it
 const REDIRECT = location.origin + location.pathname;
 const SCOPES = "user-read-recently-played user-top-read user-library-read";
 
@@ -131,7 +132,8 @@ async function load(){
 
 function showSetup(msg){
   $("#setup").classList.remove("hidden");
-  $("#clientId").value = LS.get("clientId") || (() => { try{ return JSON.parse(localStorage.getItem("curator.clientId")) || ""; }catch{ return ""; } })();
+  if (CLIENT_ID){ $("#clientId").value = CLIENT_ID; $("#clientId").classList.add("hidden"); $("#help").classList.add("hidden"); }
+  else $("#clientId").value = LS.get("clientId") || (() => { try{ return JSON.parse(localStorage.getItem("curator.clientId")) || ""; }catch{ return ""; } })();
   $("#msg").textContent = msg || "";
   $("#redir").textContent = REDIRECT;
 }
