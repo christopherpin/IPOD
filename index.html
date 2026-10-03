@@ -54,10 +54,17 @@ body.decade-view{overflow:hidden}
 <p class="empty hidden" id="loading">Loading…</p>
 <main class="wall" id="wall"></main>
 <main class="decades hidden" id="decades"></main>
-<div class="menu hidden" id="menu"><button id="toTop">Send To Top 10</button></div>
+<main class="wall hidden" id="pantheon"></main>
+<p class="empty hidden" id="pantheonEmpty">Right-click any album and choose Send To Pantheon.</p>
+<div class="menu hidden" id="menu">
+  <button data-act="top">Send To Top 10</button>
+  <button data-act="end">Send To End</button>
+  <button data-act="pantheon">Send To Pantheon</button>
+</div>
 <nav class="views hidden" id="views">
   <button data-view="wall">Wall</button>
   <button data-view="decades">Decades</button>
+  <button data-view="pantheon">Pantheon</button>
 </nav>
 
 <script>
@@ -160,15 +167,24 @@ function collector(){
     }
   } };
 }
-function renderWall(){
+function fillGrid(el, list){
   const frag = document.createDocumentFragment();
-  for (const a of albums){
+  for (const a of list){
     const img = document.createElement("img");
-    img.src = a.src; img.loading = "lazy"; img.alt = ""; img.title = a.title;
+    img.src = a.src; img.loading = "lazy"; img.alt = ""; img.title = a.title; img.dataset.id = a.id;
     img.onload = () => img.classList.add("in");
     frag.appendChild(img);
   }
-  $("#wall").replaceChildren(frag);
+  el.replaceChildren(frag);
+}
+const renderWall = () => fillGrid($("#wall"), albums);
+// the Pantheon: albums you've sent there, in the order you sent them
+const inPantheon = a => LS.get("pantheon", []).some(id => a.ids.includes(id));
+function renderPantheon(){
+  const ids = LS.get("pantheon", []);
+  const list = ids.map(id => albums.find(a => a.ids.includes(id))).filter((a, i, all) => a && all.indexOf(a) === i);
+  fillGrid($("#pantheon"), list);
+  $("#pantheonEmpty").classList.toggle("hidden", view !== "pantheon" || !loaded || list.length > 0);
 }
 // called once, after the last album has arrived
 function ready(){
@@ -176,6 +192,7 @@ function ready(){
   $("#loading").classList.add("hidden");
   renderWall();
   if (view === "decades") renderDecades();
+  if (view === "pantheon") renderPantheon();
 }
 const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
 
@@ -229,14 +246,16 @@ function settleYear(a){
 }
 const norm = s => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, "and").replace(/[^a-z0-9]+/g, " ").trim();
 /* ---------- views ---------- */
-let view = LS.get("view", "wall") === "decades" ? "decades" : "wall";
+let view = ["wall", "decades", "pantheon"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
   view = v; LS.set("view", v);
   $("#wall").classList.toggle("hidden", v !== "wall");
   $("#decades").classList.toggle("hidden", v !== "decades");
+  $("#pantheon").classList.toggle("hidden", v !== "pantheon");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades") renderDecades();
+  if (v === "pantheon") renderPantheon(); else $("#pantheonEmpty").classList.add("hidden");
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
 
@@ -356,37 +375,53 @@ function showDecade(d, rank){
   colTop[d] = 0;
 }
 
-/* right-click an album: Send To Top 10 puts it at #1 of its decade's ranking */
+/* right-click any album, on any page: rank it in its decade, or send it to the Pantheon */
 const menu = $("#menu");
 let menuFor = null;
 function closeMenu(){ menu.classList.add("hidden"); menuFor = null; }
-dec.addEventListener("contextmenu", e => {
-  const tile = e.target.closest(".tiles img");
+const decadeOf = a => a.year ? Math.floor(a.year / 10) * 10 : null;
+document.addEventListener("contextmenu", e => {
+  const tile = e.target.closest("#wall img, #pantheon img, .tiles img");
   if (!tile) return;
   e.preventDefault();
   if (drag) return;
-  menuFor = { id: tile.dataset.id, d: tile.closest(".col").dataset.decade };
+  const album = albums.find(a => a.id === tile.dataset.id);
+  if (!album) return;
+  menuFor = album;
+  const d = decadeOf(album);
+  menu.querySelector('[data-act="top"]').classList.toggle("hidden", !d);
+  menu.querySelector('[data-act="end"]').classList.toggle("hidden", !d);
+  menu.querySelector('[data-act="pantheon"]').textContent = inPantheon(album) ? "Remove From Pantheon" : "Send To Pantheon";
   menu.classList.remove("hidden");
   const w = menu.offsetWidth, h = menu.offsetHeight;
   menu.style.left = Math.min(e.clientX, innerWidth - w - 4) + "px";
   menu.style.top = Math.min(e.clientY, innerHeight - h - 4) + "px";
 });
-$("#toTop").onclick = () => {
-  if (!menuFor) return;
-  const { id, d } = menuFor;
+menu.onclick = e => {
+  const act = e.target.closest("button")?.dataset.act, album = menuFor;
+  if (!act || !album) return;
   closeMenu();
-  const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
-  const before = ranked(d, list).map(a => a.id);
-  LS.set("order." + d, [id, ...before.filter(x => x !== id)]);
-  if (!isRanked(d)) return; // release order on screen: the ranking changes quietly, nothing moves
-  // stay where you are: the albums above it each slide down one place, so scroll down one place too
-  const moved = before.indexOf(id) > 0;
+  if (act === "pantheon"){
+    const ids = LS.get("pantheon", []).filter(id => !album.ids.includes(id));
+    LS.set("pantheon", inPantheon(album) ? ids : [...ids, album.id]);
+    if (view === "pantheon") renderPantheon();
+    return;
+  }
+  // Send To Top 10 / Send To End: move it to the first or last place in its decade's ranking
+  const d = decadeOf(album), id = album.id;
+  const list = albums.filter(a => decadeOf(a) === d);
+  const before = ranked(d, list).map(a => a.id), rest = before.filter(x => x !== id);
+  LS.set("order." + d, act === "top" ? [id, ...rest] : [...rest, id]);
+  if (view !== "decades" || !isRanked(d)) return; // not on screen as a ranking: it changes quietly
+  // stay where you are: when it goes to the top, the albums above it each slide down a place,
+  // so scroll down a place too; when it goes to the end, the albums above it don't move
+  const moved = act === "top" && before.indexOf(id) > 0;
   for (const c of dec.querySelectorAll(`.col[data-decade="${d}"]`)){
     const tiles = c.querySelector(".tiles"), step = moved ? tiles.firstElementChild.offsetHeight + 4 : 0, top = c.scrollTop;
     fillTiles(tiles, d, list);
     c.scrollTop = top + step; expected.set(c, c.scrollTop);
+    colTop[d] = c.scrollTop;
   }
-  colTop[d] = (colTop[d] || 0) + (moved ? 1 : 0) * (dec.querySelector(`.col[data-decade="${d}"] .tiles img`).offsetHeight + 4);
 };
 addEventListener("pointerdown", e => { if (!e.target.closest("#menu")) closeMenu(); }, true);
 addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
