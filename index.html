@@ -120,42 +120,45 @@ async function api(path, tries=0){
 }
 
 /* ---------- the wall ---------- */
-const seen = new Set();
-const albums = []; // every album on the wall, in wall order
+let albums = []; // every album on the wall, in wall order (shared by the wall and Decades)
+const CACHE = "albums.v1";
 // remasters, deluxe and anniversary editions of the same album share one key, so each album shows once
-const byKey = new Map();
 const albumKey = a => norm(cleanTitle(a.name || "")) + "|" + norm((a.artists || [])[0]?.name || "");
 const isReissue = name => cleanTitle(name) !== name.trim();
 // the original wins over a reissue; among originals (or among reissues) the earliest wins
 const better = (x, y) => isReissue(x.name) !== isReissue(y.name) ? !isReissue(x.name) : (x.released || 9999) < (y.released || 9999);
-// collects albums only; nothing is drawn until everything has loaded and duplicates are settled
-function add(list){
-  for (const a of list){
-    if (!a || !a.id || seen.has(a.id)) continue;
-    // albums, EPs and compilations only: Spotify calls EPs "singles" too, but a real single has 1 to 3 tracks
-    if (a.album_type === "single" && (a.total_tracks || 0) <= 3) continue;
-    seen.add(a.id);
-    const imgs = a.images || [];
-    const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url;
-    if (!src) continue;
-    const year = parseInt((a.release_date || "").slice(0, 4), 10);
-    const version = { src, title: a.name + " · " + (a.artists || []).map(x => x.name).join(", "), name: a.name || "",
-      released: year > 1000 ? year : null, date: a.release_date || "", fromTitle: titleYear(a.name || "") };
-    const key = albumKey(a), same = byKey.get(key);
-    if (same){
-      // another version of an album we already have: keep whichever is the original
-      same.ids.push(a.id);
-      if (better(version, same)){
-        Object.assign(same, version);
-        settleYear(same);
+// Builds the album list as Spotify pages arrive: singles are skipped and other editions of an
+// album folded in on the spot, so the finished list is already clean.
+function collector(){
+  const seen = new Set(), byKey = new Map(), list = [];
+  return { list, add(items){
+    for (const a of items){
+      if (!a || !a.id || seen.has(a.id)) continue;
+      // albums, EPs and compilations only: Spotify calls EPs "singles" too, but a real single has 1 to 3 tracks
+      if (a.album_type === "single" && (a.total_tracks || 0) <= 3) continue;
+      seen.add(a.id);
+      const imgs = a.images || [];
+      const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url;
+      if (!src) continue;
+      const year = parseInt((a.release_date || "").slice(0, 4), 10);
+      const version = { src, title: a.name + " · " + (a.artists || []).map(x => x.name).join(", "), name: a.name || "",
+        released: year > 1000 ? year : null, date: a.release_date || "", fromTitle: titleYear(a.name || "") };
+      const key = albumKey(a), same = byKey.get(key);
+      if (same){
+        // another version of an album we already have: keep whichever is the original
+        same.ids.push(a.id);
+        if (better(version, same)){
+          Object.assign(same, version);
+          settleYear(same);
+        }
+        continue;
       }
-      continue;
+      const al = { id: a.id, ids: [a.id], artist: (a.artists || [])[0]?.name || "", ...version };
+      settleYear(al);
+      byKey.set(key, al);
+      list.push(al);
     }
-    const al = { id: a.id, ids: [a.id], artist: (a.artists || [])[0]?.name || "", ...version };
-    settleYear(al);
-    byKey.set(key, al);
-    albums.push(al);
-  }
+  } };
 }
 function renderWall(){
   const frag = document.createDocumentFragment();
@@ -176,27 +179,31 @@ function ready(){
 }
 const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
 
-async function load(){
-  // 1. last 50 plays, newest first
-  const recent = await safe("/me/player/recently-played?limit=50");
-  add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
-
-  // 2. top tracks: 4 weeks, 6 months, all time (up to 99 each)
-  const ranges = ["short_term", "medium_term", "long_term"];
-  const tops = await Promise.all(ranges.map(r => Promise.all([
+// run fn over items, a few at a time, keeping results in order
+async function pool(items, n, fn){
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length){ const k = i++; out[k] = await fn(items[k]); } }));
+  return out;
+}
+async function load(col){
+  // ask Spotify for everything at once rather than one page after another
+  const recentP = safe("/me/player/recently-played?limit=50");
+  const topsP = Promise.all(["short_term", "medium_term", "long_term"].flatMap(r => [
     safe(`/me/top/tracks?time_range=${r}&limit=50`),
     safe(`/me/top/tracks?time_range=${r}&limit=50&offset=49`)
-  ])));
-  for (const pages of tops) for (const p of pages) add((p?.items || []).map(t => t.album));
+  ]));
+  const first = await safe("/me/albums?limit=50");
+  const offsets = [];
+  for (let o = 50; o < (first?.total || 0); o += 50) offsets.push(o);
+  const restP = pool(offsets, 6, o => safe(`/me/albums?limit=50&offset=${o}`));
 
+  // then add them in wall order: 1. last 50 plays, newest first
+  const recent = await recentP;
+  col.add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
+  // 2. top tracks: 4 weeks, 6 months, all time
+  for (const p of await topsP) col.add((p?.items || []).map(t => t.album));
   // 3. saved albums, most recently saved first
-  let next = "/me/albums?limit=50";
-  while (next){
-    const p = await safe(next);
-    if (!p) break;
-    add((p.items || []).map(i => i.album));
-    next = p.next;
-  }
+  for (const p of [first, ...await restP]) col.add((p?.items || []).map(i => i.album));
 }
 
 /* ---------- original release years ---------- */
@@ -500,13 +507,27 @@ $("#form").onsubmit = async e => {
     fake[1].name = "Jim Hall On Guitar 1955-1962"; fake[1].release_date = "2021";
     fake[2].name = "Abbey Road"; fake[2].release_date = "1969"; fake[2].artists = fake[0].artists = [{ name: "The Beatles" }];
     fake[3].name = "Abbey Road (Super Deluxe Edition)"; fake[3].artists = [{ name: "The Beatles" }];
-    startViews(); add(fake); ready(); return;
+    const col = collector(); col.add(fake); albums = col.list;
+    startViews(); ready(); return;
   }
   try { await handleRedirect(); } catch(e){ return showSetup(e.message); }
   if (!LS.get("token")) return showSetup();
   startViews();
-  try { $("#loading").classList.remove("hidden"); await load(); ready(); }
-  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); seen.clear(); byKey.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
+  const cached = LS.get(CACHE);
+  if (Array.isArray(cached) && cached.length){
+    // show last visit's albums straight away; fetch a fresh list quietly for next time, so nothing moves now
+    albums = cached; ready();
+    const col = collector();
+    load(col).then(() => { if (col.list.length) LS.set(CACHE, col.list); })
+      .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
+    return;
+  }
+  try {
+    $("#loading").classList.remove("hidden");
+    const col = collector(); await load(col);
+    albums = col.list; LS.set(CACHE, albums); ready();
+  }
+  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); albums = []; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
 </script>
 </body>
