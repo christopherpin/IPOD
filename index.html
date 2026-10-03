@@ -540,6 +540,13 @@ dec.addEventListener("scroll", e => {
   for (const o of dec.querySelectorAll(`.col[data-decade="${c.dataset.decade}"]`))
     if (o !== c && Math.abs(o.scrollTop - c.scrollTop) >= 1){ o.scrollTop = c.scrollTop; expected.set(o, o.scrollTop); }
 }, true);
+// with the mouse over the decade titles, the wheel scrolls the decades sideways
+dec.addEventListener("wheel", e => {
+  if (!e.target.closest(".col h2") || e.ctrlKey) return;
+  e.preventDefault();
+  const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  dec.scrollLeft += d * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? dec.clientWidth : 1);
+}, { passive: false });
 dec.addEventListener("click", e => {
   const h = e.target.closest(".col h2");
   if (!h) return;
