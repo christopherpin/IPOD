@@ -10,7 +10,7 @@
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
 .wall img{opacity:0;transition:opacity .4s;display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile)}
-.setup{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+.setup{position:fixed;inset:0;z-index:5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
 .setup form{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px}
 .setup input,.setup button{font:inherit;color:inherit;border-radius:999px;padding:10px 16px;border:1px solid #2a2a2e;background:var(--tile)}
 .setup button{background:var(--accent);color:#04170a;border-color:var(--accent);font-weight:600;cursor:pointer}
@@ -39,6 +39,19 @@ body.decade-view{overflow:hidden}
 .menu{position:fixed;z-index:40;padding:4px;border-radius:8px;background:var(--rank);box-shadow:0 10px 30px rgba(0,0,0,.5)}
 .menu button{display:block;font:600 13px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#000;background:none;border:0;border-radius:5px;padding:10px 14px;cursor:pointer;white-space:nowrap}
 .menu button:hover{background:rgba(0,0,0,.1)}
+/* pantheon: a numbered 1-100 grid, ten to a row, with a queue of albums waiting to be placed */
+.pantheon{padding:4px 4px 72px}
+.pqueue{margin-bottom:12px;padding:4px;border-radius:4px}
+.pqueue h3{margin:6px 2px 8px;font:700 12px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.pq,.pgrid{display:grid;grid-template-columns:repeat(10,1fr);gap:4px}
+.pq img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile)}
+.pslot{position:relative;aspect-ratio:1;background:var(--tile);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.pslot span{font:700 clamp(10px,1.8vw,22px)/1 "Helvetica Neue",Helvetica,Arial,sans-serif;color:#3a3a40;user-select:none}
+.pslot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.pslot.filled span{position:absolute;top:5px;left:6px;z-index:1;color:#fff;font-size:clamp(9px,1.1vw,14px);text-shadow:0 1px 3px rgba(0,0,0,.9)}
+.pq img,.pslot img{cursor:grab;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
+.pq img.placeholder,.pslot img.placeholder{opacity:.15}
+.pslot.over,.pqueue.over{outline:2px solid var(--rank);outline-offset:-2px}
 .empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
 </style>
 </head>
@@ -54,9 +67,15 @@ body.decade-view{overflow:hidden}
 <p class="empty hidden" id="loading">Loading…</p>
 <main class="wall" id="wall"></main>
 <main class="decades hidden" id="decades"></main>
-<main class="wall hidden" id="pantheon"></main>
-<main class="hidden" id="wax"></main>
-<p class="empty hidden" id="pantheonEmpty">Right-click any album and choose Send To Pantheon.</p>
+<main class="pantheon hidden" id="pantheon"></main>
+<main class="wall hidden" id="wax"></main>
+<div class="setup hidden" id="waxSetup">
+  <form id="waxForm">
+    <input id="waxUser" placeholder="Discogs username" autocomplete="off" spellcheck="false">
+    <button type="submit">Show my records</button>
+    <p id="waxMsg"></p>
+  </form>
+</div>
 <div class="menu hidden" id="menu">
   <button data-act="top">Send To Top 10</button>
   <button data-act="end">Send To End</button>
@@ -180,13 +199,117 @@ function fillGrid(el, list){
   el.replaceChildren(frag);
 }
 const renderWall = () => fillGrid($("#wall"), albums);
-// the Pantheon: albums you've sent there, in the order you sent them
-const inPantheon = a => LS.get("pantheon", []).some(id => a.ids.includes(id));
+/* ---------- pantheon: your top 100, placed by hand ---------- */
+// slots: 100 places (album id or null); queue: albums sent to the Pantheon but not placed yet
+function pantheon(){
+  let slots = LS.get("pantheon.slots"), queue = LS.get("pantheon.queue");
+  if (!Array.isArray(slots)) slots = Array(100).fill(null);
+  if (!Array.isArray(queue)) queue = LS.get("pantheon", []); // albums sent before the grid existed
+  return { slots, queue };
+}
+function savePantheon(p){ LS.set("pantheon.slots", p.slots); LS.set("pantheon.queue", p.queue); LS.del("pantheon"); }
+const byAnyId = id => albums.find(a => a.ids.includes(id));
+const inPantheon = a => { const p = pantheon(); return [...p.slots, ...p.queue].some(id => id && a.ids.includes(id)); };
+function cover(id){
+  const a = byAnyId(id);
+  if (!a) return null;
+  const img = document.createElement("img");
+  img.src = a.src; img.alt = ""; img.title = a.title; img.dataset.id = a.id; img.draggable = false;
+  return img;
+}
 function renderPantheon(){
-  const ids = LS.get("pantheon", []);
-  const list = ids.map(id => albums.find(a => a.ids.includes(id))).filter((a, i, all) => a && all.indexOf(a) === i);
-  fillGrid($("#pantheon"), list);
-  $("#pantheonEmpty").classList.toggle("hidden", view !== "pantheon" || !loaded || list.length > 0);
+  const { slots, queue } = pantheon();
+  const root = $("#pantheon"), frag = document.createDocumentFragment();
+  const q = document.createElement("section");
+  q.className = "pqueue"; q.dataset.zone = "queue";
+  q.innerHTML = "<h3>Queue</h3>";
+  const qg = document.createElement("div"); qg.className = "pq";
+  for (const id of queue){ const img = cover(id); if (img) qg.appendChild(img); }
+  q.appendChild(qg);
+  if (!qg.childElementCount) q.classList.add("hidden");
+  frag.appendChild(q);
+  const grid = document.createElement("div"); grid.className = "pgrid";
+  slots.forEach((id, i) => {
+    const slot = document.createElement("div");
+    slot.className = "pslot"; slot.dataset.slot = i;
+    slot.innerHTML = `<span>${i + 1}</span>`;
+    const img = id && cover(id);
+    if (img){ slot.classList.add("filled"); slot.appendChild(img); }
+    grid.appendChild(slot);
+  });
+  frag.appendChild(grid);
+  root.replaceChildren(frag);
+}
+// drag an album from the queue or a place onto another place (swapping if it's taken) or back to the queue
+let ppending = null, pdrag = null;
+$("#pantheon").addEventListener("pointerdown", e => {
+  const img = e.target.closest(".pq img, .pslot img");
+  if (!img || e.button > 0 || pdrag) return;
+  if (e.pointerType === "mouse") e.preventDefault();
+  const p = ppending = { img, x: e.clientX, y: e.clientY, touch: e.pointerType !== "mouse" };
+  if (p.touch) p.timer = setTimeout(() => { if (ppending === p) pbegin(p); }, 300);
+});
+addEventListener("pointermove", e => {
+  if (pdrag){ pmove(e.clientX, e.clientY); return; }
+  if (!ppending) return;
+  if (Math.hypot(e.clientX - ppending.x, e.clientY - ppending.y) > 6){
+    if (ppending.touch){ clearTimeout(ppending.timer); ppending = null; }
+    else pbegin(ppending, e.clientX, e.clientY);
+  }
+});
+addEventListener("pointerup", pend);
+addEventListener("pointercancel", pend);
+document.addEventListener("touchmove", e => { if (pdrag) e.preventDefault(); }, { passive: false });
+function pbegin(p, x = p.x, y = p.y){
+  ppending = null;
+  const r = p.img.getBoundingClientRect(), ghost = p.img.cloneNode();
+  ghost.className = "ghost";
+  Object.assign(ghost.style, { width: r.width + "px", height: r.height + "px" });
+  document.body.appendChild(ghost);
+  p.img.classList.add("placeholder");
+  const slot = p.img.closest(".pslot");
+  pdrag = { img: p.img, ghost, w: r.width, h: r.height, from: slot ? +slot.dataset.slot : "queue", over: null };
+  pmove(x, y);
+  // hold an album near the top or bottom of the window to scroll the page
+  const edge = () => {
+    if (!pdrag) return;
+    const y = pdrag.y, m = 70;
+    if (y < m) scrollBy(0, -Math.ceil((m - y) / 4));
+    else if (y > innerHeight - m) scrollBy(0, Math.ceil((y - innerHeight + m) / 4));
+    pmove(pdrag.x, pdrag.y);
+    requestAnimationFrame(edge);
+  };
+  requestAnimationFrame(edge);
+}
+function pmove(x, y){
+  pdrag.x = x; pdrag.y = y;
+  const { ghost, w, h } = pdrag;
+  ghost.style.left = x - w / 2 + "px"; ghost.style.top = y - h / 2 + "px";
+  const under = document.elementFromPoint(x, y);
+  const zone = under && (under.closest(".pslot") || under.closest(".pqueue"));
+  if (zone !== pdrag.over){ pdrag.over?.classList.remove("over"); zone?.classList.add("over"); pdrag.over = zone; }
+}
+function pend(){
+  if (ppending){ clearTimeout(ppending.timer); ppending = null; }
+  if (!pdrag) return;
+  const { img, ghost, from, over } = pdrag;
+  pdrag = null;
+  ghost.remove(); over?.classList.remove("over"); img.classList.remove("placeholder");
+  if (!over) return;
+  const p = pantheon(), id = img.dataset.id;
+  const take = () => { if (from === "queue") p.queue = p.queue.filter(x => !byAnyId(id)?.ids.includes(x)); else p.slots[from] = null; };
+  if (over.dataset.zone === "queue"){
+    if (from === "queue") return;
+    take(); p.queue.push(id);
+  } else {
+    const to = +over.dataset.slot;
+    if (to === from) return;
+    const there = p.slots[to];
+    take();
+    p.slots[to] = id;
+    if (there){ if (from === "queue") p.queue.unshift(there); else p.slots[from] = there; } // swap
+  }
+  savePantheon(p); renderPantheon();
 }
 // called once, after the last album has arrived
 function ready(){
@@ -247,6 +370,62 @@ function settleYear(a){
   return a.year !== before;
 }
 const norm = s => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, "and").replace(/[^a-z0-9]+/g, " ").trim();
+/* ---------- wax: the vinyl in your Discogs collection ---------- */
+// The IPOD Discogs app's key and secret (same as discogs.js): they read public data only and
+// can't see or change anyone's account, so the collection must be set to public in Discogs.
+const DISCOGS = "key=RHSqiCtFLCKBYTeUotje&secret=ERZrvUHMFzVXbKQLUQMQylUFJEkzEcuG";
+const WAX = "wax.v1";
+async function discogsVinyl(user){
+  const out = [];
+  for (let page = 1, pages = 1; page <= pages; ){
+    const r = await fetch(`https://api.discogs.com/users/${encodeURIComponent(user)}/collection/folders/0/releases` +
+      `?per_page=100&page=${page}&sort=added&sort_order=desc&${DISCOGS}`);
+    if (r.status === 429){ await sleep(5000); continue; }
+    if (r.status === 404) throw new Error("Couldn't find that Discogs username.");
+    if (r.status === 401 || r.status === 403) throw new Error("That collection is private. In Discogs, open Settings, then Privacy, and make your collection public.");
+    if (!r.ok) throw new Error("Discogs didn't answer. Try again in a minute.");
+    const j = await r.json();
+    pages = j.pagination?.pages || 1; page++;
+    for (const it of j.releases || []){
+      const b = it.basic_information || {};
+      if (!(b.formats || []).some(f => /vinyl/i.test(f.name || ""))) continue; // records only
+      const src = b.cover_image || b.thumb;
+      if (!src || /spacer\.gif/.test(src)) continue;
+      const artists = (b.artists || []).map(a => (a.name || "").replace(/\s\(\d+\)$/, "")).join(", ");
+      out.push({ id: "dg" + it.instance_id, src, title: (b.title || "") + " · " + artists });
+    }
+  }
+  return out;
+}
+let waxRefreshed = false;
+const DISCOGS_USER = "christopherpinradoi"; // whose records Wax shows unless another username is typed in
+async function renderWax(){
+  const user = LS.get("discogs") || DISCOGS_USER;
+  const setup = msg => { $("#waxSetup").classList.remove("hidden"); $("#waxUser").value = user || ""; $("#waxMsg").textContent = msg || ""; };
+  if (!user) return setup();
+  $("#waxSetup").classList.add("hidden");
+  const cached = LS.get(WAX);
+  if (cached && cached.user === user){
+    // last visit's records straight away; fetch a fresh list quietly for next time
+    if (!$("#wax").childElementCount) fillGrid($("#wax"), cached.list);
+    if (!waxRefreshed){ waxRefreshed = true; discogsVinyl(user).then(list => LS.set(WAX, { user, list })).catch(() => {}); }
+    return;
+  }
+  $("#loading").classList.remove("hidden");
+  try {
+    const list = await discogsVinyl(user);
+    LS.set(WAX, { user, list }); waxRefreshed = true;
+    if (view === "wax") fillGrid($("#wax"), list);
+  } catch(e){ if (view === "wax") setup(e.message); }
+  finally { $("#loading").classList.add("hidden"); }
+}
+$("#waxForm").onsubmit = e => {
+  e.preventDefault();
+  const u = $("#waxUser").value.trim();
+  if (!u) return void ($("#waxMsg").textContent = "Type your Discogs username first.");
+  LS.set("discogs", u); $("#wax").replaceChildren(); renderWax();
+};
+
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
@@ -254,11 +433,12 @@ function setView(v){
   $("#wall").classList.toggle("hidden", v !== "wall");
   $("#decades").classList.toggle("hidden", v !== "decades");
   $("#pantheon").classList.toggle("hidden", v !== "pantheon");
-  $("#wax").classList.toggle("hidden", v !== "wax"); // Wax: page still to be designed
+  $("#wax").classList.toggle("hidden", v !== "wax");
+  if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades") renderDecades();
-  if (v === "pantheon") renderPantheon(); else $("#pantheonEmpty").classList.add("hidden");
+  if (v === "pantheon") renderPantheon();
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
 
@@ -405,8 +585,12 @@ menu.onclick = e => {
   if (!act || !album) return;
   closeMenu();
   if (act === "pantheon"){
-    const ids = LS.get("pantheon", []).filter(id => !album.ids.includes(id));
-    LS.set("pantheon", inPantheon(album) ? ids : [...ids, album.id]);
+    // new arrivals wait in the queue; removing takes it out of the queue or its place
+    const p = pantheon(), was = inPantheon(album);
+    p.queue = p.queue.filter(id => !album.ids.includes(id));
+    p.slots = p.slots.map(id => id && album.ids.includes(id) ? null : id);
+    if (!was) p.queue.push(album.id);
+    savePantheon(p);
     if (view === "pantheon") renderPantheon();
     return;
   }
