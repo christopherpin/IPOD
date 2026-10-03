@@ -49,6 +49,18 @@ body.dock-left .wall,body.dock-left .pantheon,body.dock-left .queue{padding-left
 body.dock-left .decades{left:var(--dock)}
 body.dock-right .wall,body.dock-right .pantheon,body.dock-right .queue{padding-right:var(--dock)}
 body.dock-right .decades{right:var(--dock)}
+/* phones: the bar is fixed along the bottom on a solid black strip with its own space, and can't be moved */
+body.phone .views,body.phone .views[class*=dock-]{left:0;right:0;top:auto;bottom:0;transform:none;flex-direction:row;align-items:center;justify-content:space-evenly;
+  gap:0;border-radius:0;padding:4px 2px calc(4px + env(safe-area-inset-bottom));background:#000;backdrop-filter:none;-webkit-backdrop-filter:none;touch-action:auto}
+body.phone .wall{padding-bottom:calc(var(--dock) + 4px)}
+body.phone .pantheon,body.phone .queue{padding-bottom:calc(var(--dock) + 8px)}
+body.phone .decades,body.phone .ipod{bottom:var(--dock)}
+body.phone .ipod{padding-bottom:0}
+body.phone .tiles{padding-bottom:4px}
+body.phone .views button{padding:0 3px;font-size:11px;border-radius:8px}
+body.phone .views button::after,body.phone .views button.on{font-size:13px}
+body.phone .views button.hub{font-size:14px}
+body.phone .views button.hub::after,body.phone .views button.hub.on{font-size:16px}
 
 /* decades: one column per decade, loops left/right, each column scrolls on its own */
 body.decade-view{overflow:hidden}
@@ -761,20 +773,26 @@ const bar = $("#views");
 const SIDES = ["top", "bottom", "left", "right"];
 let dock = SIDES.includes(LS.get("dock")) ? LS.get("dock") : "bottom";
 let barMoved = false;
+// phones keep the bar fixed at the bottom, whatever side was saved on a bigger screen
+const PHONE = matchMedia("(max-width: 600px), (pointer: coarse) and (max-height: 500px)");
+const side = () => PHONE.matches ? "bottom" : dock;
 function measureDock(){
   if (bar.classList.contains("hidden")) return;
-  const r = bar.getBoundingClientRect(), gap = 10;
-  const size = dock === "top" ? r.bottom + gap : dock === "left" ? r.right + gap : dock === "right" ? innerWidth - r.left + gap : 0;
+  const r = bar.getBoundingClientRect(), gap = 10, d = side();
+  const size = PHONE.matches ? r.height : d === "top" ? r.bottom + gap : d === "left" ? r.right + gap : d === "right" ? innerWidth - r.left + gap : 0;
   document.body.style.setProperty("--dock", Math.ceil(size) + "px");
 }
 function applyDock(){
-  for (const s of SIDES){ bar.classList.toggle("dock-" + s, s === dock && s !== "bottom"); document.body.classList.toggle("dock-" + s, s === dock && s !== "bottom"); }
+  const d = side();
+  document.body.classList.toggle("phone", PHONE.matches);
+  for (const s of SIDES){ bar.classList.toggle("dock-" + s, s === d && s !== "bottom"); document.body.classList.toggle("dock-" + s, s === d && s !== "bottom"); }
   measureDock();
 }
 applyDock();
+PHONE.addEventListener?.("change", applyDock);
 addEventListener("resize", measureDock);
 bar.addEventListener("pointerdown", e => {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || PHONE.matches) return;
   const r0 = bar.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
   const ox = sx - r0.left, oy = sy - r0.top;
   let dragging = false, lx = sx, ly = sy;
