@@ -575,7 +575,7 @@ function glideTo(x){
   glide = requestAnimationFrame(step);
 }
 // when Decades sits idle, drift slowly to the right; any touch of the mouse, keys or screen stops it
-const IDLE_MS = 8000, DRIFT = 18; // px per second
+const IDLE_MS = 3000, DRIFT = 36; // px per second
 let lastInput = performance.now(), driftAt = 0, driftX = 0;
 for (const ev of ["pointermove", "pointerdown", "wheel", "keydown", "touchstart"])
   addEventListener(ev, () => { lastInput = performance.now(); driftAt = 0; }, { passive: true, capture: true });
