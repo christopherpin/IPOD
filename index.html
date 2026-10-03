@@ -54,6 +54,24 @@ body.decade-view{overflow:hidden}
 .pq img.placeholder,.pslot img.placeholder{opacity:.15}
 .pslot.over,.pqueue.over{outline:2px solid var(--rank);outline-offset:-2px}
 .empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+/* queue: albums you want to hear, found with one search bar that looks beyond Spotify */
+.queue{padding:0 4px 72px}
+.qbar{position:sticky;top:0;z-index:3;display:flex;justify-content:center;padding:14px 12px;background:var(--bg)}
+.qbar input{width:100%;max-width:520px;font:inherit;font-size:15px;color:var(--text);background:var(--tile);border:1px solid #2a2a2e;border-radius:999px;padding:11px 18px;outline:none}
+.qbar input:focus{border-color:#3a3a40}
+.qbar input::placeholder{color:var(--muted)}
+.qnote{margin:28px 0;text-align:center;color:var(--muted)}
+.qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px}
+.qres{gap:14px 4px}
+.qtile{position:relative;display:block;aspect-ratio:1;background:var(--tile);overflow:hidden;cursor:pointer;user-select:none}
+.qtile i{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:12px;text-align:center;font:600 13px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-style:normal;color:var(--muted)}
+.qtile img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .4s;-webkit-user-drag:none}
+.qtile img.in{opacity:1}
+.qtile b{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:var(--rank);color:#000;font:700 13px/22px system-ui,sans-serif;text-align:center;opacity:0;transform:scale(.6);transition:opacity .15s,transform .15s}
+.qtile.on b{opacity:1;transform:none}
+.qcap{margin-top:6px;padding:0 2px;line-height:1.3;cursor:pointer}
+.qcap div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qcap .sub{color:var(--muted);font-size:12px}
 </style>
 </head>
 <body>
@@ -70,6 +88,10 @@ body.decade-view{overflow:hidden}
 <main class="decades hidden" id="decades"></main>
 <main class="pantheon hidden" id="pantheon"></main>
 <main class="wall hidden" id="wax"></main>
+<main class="queue hidden" id="queue">
+  <div class="qbar"><input id="qsearch" type="search" placeholder="Search for an album" autocomplete="off" spellcheck="false"></div>
+  <div id="qbody"></div>
+</main>
 <div class="setup hidden" id="waxSetup">
   <form id="waxForm">
     <input id="waxUser" placeholder="Discogs username" autocomplete="off" spellcheck="false">
@@ -82,11 +104,16 @@ body.decade-view{overflow:hidden}
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
 </div>
+<div class="menu hidden" id="qmenu">
+  <button data-act="first">Move To Front</button>
+  <button data-act="remove">Remove From Queue</button>
+</div>
 <nav class="views hidden" id="views">
   <button data-view="wall">Wall</button>
   <button data-view="decades">Decades</button>
   <button data-view="pantheon">Pantheon</button>
   <button data-view="wax">Wax</button>
+  <button data-view="queue">Queue</button>
 </nav>
 
 <script>
@@ -427,14 +454,188 @@ $("#waxForm").onsubmit = e => {
   LS.set("discogs", u); $("#wax").replaceChildren(); renderWax();
 };
 
+/* ---------- queue: albums you want to hear, found anywhere ---------- */
+// One search asks Spotify, Apple Music (iTunes), Discogs and MusicBrainz at once. Nothing is drawn
+// until every source has answered (or given up), then the results appear once, merged and in order.
+const QUEUE = "queue";
+const queueList = () => { const q = LS.get(QUEUE); return Array.isArray(q) ? q : []; };
+const artistKey = s => norm(s.replace(/\s\(\d+\)$/, "").replace(/\*$/, "")).replace(/^the /, "");
+const resultKey = (name, artist) => norm(cleanTitle(name)) + "|" + artistKey(artist);
+const yearOf = d => { const y = parseInt(String(d || "").slice(0, 4), 10); return y > 1000 ? y : null; };
+const within = (p, ms = 7000) => Promise.race([p, sleep(ms).then(() => [])]).catch(() => []);
+function jsonp(url){
+  return new Promise((res, rej) => {
+    const cb = "_q" + Math.random().toString(36).slice(2), s = document.createElement("script");
+    window[cb] = j => { window[cb] = () => {}; s.remove(); res(j); };
+    s.onerror = () => { s.remove(); rej(new Error("failed")); };
+    s.src = url + "&callback=" + cb;
+    document.head.appendChild(s);
+  });
+}
+async function fromSpotify(q){
+  if (!LS.get("token")) return [];
+  const j = await api("/search?type=album&limit=10&q=" + encodeURIComponent(q));
+  return (j.albums?.items || []).filter(a => a && !(a.album_type === "single" && (a.total_tracks || 0) <= 3)).map(a => {
+    const imgs = a.images || [];
+    return { name: a.name || "", artist: (a.artists || [])[0]?.name || "", year: yearOf(a.release_date), source: "spotify",
+      src: (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url || "", url: a.external_urls?.spotify || "" };
+  });
+}
+async function fromItunes(q){
+  // Apple's search doesn't allow other sites to read it directly, so it's loaded the old way, as a script
+  const j = await jsonp("https://itunes.apple.com/search?media=music&entity=album&limit=25&term=" + encodeURIComponent(q));
+  return (j.results || []).filter(a => a.collectionName && !/\s-\sSingle$/.test(a.collectionName)).map(a => ({
+    name: a.collectionName.replace(/\s-\sEP$/, ""), artist: a.artistName || "", year: yearOf(a.releaseDate), source: "itunes",
+    src: (a.artworkUrl100 || "").replace("100x100bb", "600x600bb"), url: a.collectionViewUrl || "" }));
+}
+async function fromDiscogs(q){
+  const r = await fetch(`https://api.discogs.com/database/search?type=master&per_page=20&q=${encodeURIComponent(q)}&${DISCOGS}`);
+  if (!r.ok) return [];
+  return ((await r.json()).results || []).map(m => {
+    const [artist, ...rest] = (m.title || "").split(" - ");
+    const src = m.cover_image && !/spacer\.gif/.test(m.cover_image) ? m.cover_image : "";
+    return { name: rest.join(" - ") || artist, artist: rest.length ? artist.replace(/\s\(\d+\)$/, "").replace(/\*$/, "") : "",
+      year: yearOf(m.year), source: "discogs", src, url: m.uri ? "https://www.discogs.com" + m.uri : "" };
+  });
+}
+async function fromMusicBrainz(q){
+  const t = q.replace(/[+\-&|!(){}[\]^"~*?:\\\/]/g, " ").trim();
+  if (!t) return [];
+  const query = `(releasegroup:(${t}) OR artistname:(${t})) AND (primarytype:album OR primarytype:ep)`;
+  const r = await fetch("https://musicbrainz.org/ws/2/release-group?fmt=json&limit=20&query=" + encodeURIComponent(query));
+  if (!r.ok) return [];
+  return ((await r.json())["release-groups"] || []).filter(g => (g.score || 0) >= 70).map(g => ({
+    name: g.title || "", artist: (g["artist-credit"] || [])[0]?.name || "", year: yearOf(g["first-release-date"]), source: "musicbrainz",
+    src: `https://coverartarchive.org/release-group/${g.id}/front-250`, url: "https://musicbrainz.org/release-group/" + g.id }));
+}
+const RANK = ["spotify", "itunes", "discogs", "musicbrainz"]; // whose cover and link win when sources agree
+async function searchAlbums(q){
+  const lists = await Promise.all([fromSpotify, fromItunes, fromDiscogs, fromMusicBrainz].map(f => within(f(q))));
+  const byKey = new Map(), words = norm(q).split(" ").filter(Boolean);
+  lists.flat().forEach((r, i) => {
+    if (!r.name) return;
+    const key = resultKey(r.name, r.artist);
+    let m = byKey.get(key);
+    if (!m){
+      const hay = " " + norm(cleanTitle(r.name) + " " + r.artist) + " ";
+      const match = words.filter(w => hay.includes(" " + w)).length / (words.length || 1);
+      byKey.set(key, m = { key, name: cleanTitle(r.name) || r.name, artist: r.artist, year: r.year, src: "", url: "", spotify: false, sources: new Set(), match, i });
+    }
+    m.sources.add(r.source);
+    if (r.source === "spotify") m.spotify = true;
+    if (r.year && (!m.year || r.year < m.year)) m.year = r.year; // the original release
+    const better = s => !m.from || RANK.indexOf(s) < RANK.indexOf(m.from);
+    if (r.src && better(r.source)){ m.src = r.src; m.url = r.url || m.url; m.from = r.source; }
+    if (!m.url) m.url = r.url;
+  });
+  // best match to what was typed first, then albums more sources agree on, then the order they came in
+  return [...byKey.values()].sort((a, b) => b.match - a.match || b.sources.size - a.sources.size || a.i - b.i).slice(0, 40)
+    .map(({ key, name, artist, year, src, url, spotify }) => ({ key, name, artist, year, src, url, spotify }));
+}
+function qtile(it){
+  const t = document.createElement("div");
+  t.className = "qtile"; t.dataset.key = it.key; t.title = it.name + (it.artist ? " · " + it.artist : "");
+  const label = document.createElement("i"); label.textContent = it.name; t.appendChild(label);
+  if (it.src){
+    // the name sits underneath in case there's no cover; the cover fades in over it
+    label.style.opacity = 0;
+    const img = new Image(); img.alt = ""; img.loading = "lazy"; img.draggable = false;
+    img.onload = () => img.classList.add("in");
+    img.onerror = () => { img.remove(); label.style.opacity = ""; };
+    img.src = it.src; t.appendChild(img);
+  }
+  t.appendChild(Object.assign(document.createElement("b"), { textContent: "✓" }));
+  return t;
+}
+let qResults = null, qSeq = 0, qTimer = 0;
+function renderQueue(){
+  const body = $("#qbody"), frag = document.createDocumentFragment(), note = text => { const p = document.createElement("p"); p.className = "qnote"; p.textContent = text; frag.appendChild(p); };
+  if (qResults){
+    // search results: click to add to the queue, click again to take it back out
+    const inQ = new Set(queueList().map(x => x.key));
+    if (!qResults.length) note("Nothing found.");
+    else {
+      const grid = document.createElement("div"); grid.className = "qgrid qres";
+      for (const it of qResults){
+        const cell = document.createElement("div"); cell.dataset.key = it.key;
+        const t = qtile(it); t.classList.toggle("on", inQ.has(it.key));
+        const cap = document.createElement("div"); cap.className = "qcap";
+        const n = document.createElement("div"); n.textContent = it.name;
+        const sub = document.createElement("div"); sub.className = "sub";
+        sub.textContent = [it.artist, it.year, it.spotify ? "" : "not on Spotify"].filter(Boolean).join(" · ");
+        cap.append(n, sub); cell.append(t, cap); grid.appendChild(cell);
+      }
+      frag.appendChild(grid);
+    }
+  } else {
+    const list = queueList();
+    if (!list.length) note("Search for an album to add it to your queue.");
+    else {
+      const grid = document.createElement("div"); grid.className = "qgrid qlist";
+      for (const it of list) grid.appendChild(qtile(it));
+      frag.appendChild(grid);
+    }
+  }
+  body.replaceChildren(frag);
+}
+$("#qsearch").addEventListener("input", () => {
+  clearTimeout(qTimer);
+  const q = $("#qsearch").value.trim(), seq = ++qSeq;
+  if (!q){ qResults = null; renderQueue(); return; }
+  qTimer = setTimeout(async () => {
+    const res = await searchAlbums(q);
+    if (seq !== qSeq) return; // a newer search has started
+    qResults = res; window.scrollTo(0, 0); renderQueue();
+  }, 450);
+});
+$("#qsearch").addEventListener("keydown", e => { if (e.key === "Escape" && e.target.value){ e.target.value = ""; e.target.dispatchEvent(new Event("input")); } });
+$("#qbody").addEventListener("click", e => {
+  const cell = e.target.closest(".qres > div");
+  if (cell){
+    const it = qResults.find(r => r.key === cell.dataset.key), list = queueList(), has = list.some(x => x.key === it.key);
+    LS.set(QUEUE, has ? list.filter(x => x.key !== it.key) : [...list, it]);
+    cell.querySelector(".qtile").classList.toggle("on", !has);
+    return;
+  }
+  // a queued album opens where you can play it: Spotify when it's there, otherwise wherever it was found
+  const t = e.target.closest(".qlist .qtile"), it = t && queueList().find(x => x.key === t.dataset.key);
+  if (it?.url) window.open(it.url, "_blank", "noopener");
+});
+const qmenu = $("#qmenu");
+let qmenuFor = null;
+const closeQmenu = () => { qmenu.classList.add("hidden"); qmenuFor = null; };
+$("#qbody").addEventListener("contextmenu", e => {
+  const t = e.target.closest(".qlist .qtile");
+  if (!t) return;
+  e.preventDefault();
+  qmenuFor = t.dataset.key;
+  qmenu.classList.remove("hidden");
+  qmenu.style.left = Math.min(e.clientX, innerWidth - qmenu.offsetWidth - 4) + "px";
+  qmenu.style.top = Math.min(e.clientY, innerHeight - qmenu.offsetHeight - 4) + "px";
+});
+qmenu.onclick = e => {
+  const act = e.target.closest("button")?.dataset.act, key = qmenuFor;
+  if (!act || !key) return;
+  closeQmenu();
+  const list = queueList(), it = list.find(x => x.key === key), rest = list.filter(x => x.key !== key);
+  LS.set(QUEUE, act === "first" ? [it, ...rest] : rest);
+  renderQueue();
+};
+addEventListener("pointerdown", e => { if (!e.target.closest("#qmenu")) closeQmenu(); }, true);
+addEventListener("keydown", e => { if (e.key === "Escape") closeQmenu(); });
+addEventListener("wheel", closeQmenu, { passive: true });
+addEventListener("blur", closeQmenu);
+
 /* ---------- views ---------- */
-let view = ["wall", "decades", "pantheon", "wax"].includes(LS.get("view")) ? LS.get("view") : "wall";
+let view = ["wall", "decades", "pantheon", "wax", "queue"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
   view = v; LS.set("view", v);
   $("#wall").classList.toggle("hidden", v !== "wall");
   $("#decades").classList.toggle("hidden", v !== "decades");
   $("#pantheon").classList.toggle("hidden", v !== "pantheon");
   $("#wax").classList.toggle("hidden", v !== "wax");
+  $("#queue").classList.toggle("hidden", v !== "queue");
+  if (v === "queue"){ renderQueue(); if (matchMedia("(pointer: fine)").matches) $("#qsearch").focus({ preventScroll: true }); }
   if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
