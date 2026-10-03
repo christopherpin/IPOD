@@ -398,8 +398,9 @@ async function discogsVinyl(user){
   return out;
 }
 let waxRefreshed = false;
+const DISCOGS_USER = "christopherpinradoi"; // whose records Wax shows unless another username is typed in
 async function renderWax(){
-  const user = LS.get("discogs");
+  const user = LS.get("discogs") || DISCOGS_USER;
   const setup = msg => { $("#waxSetup").classList.remove("hidden"); $("#waxUser").value = user || ""; $("#waxMsg").textContent = msg || ""; };
   if (!user) return setup();
   $("#waxSetup").classList.add("hidden");
