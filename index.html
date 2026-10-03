@@ -16,6 +16,24 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .setup button{background:var(--accent);color:#04170a;border-color:var(--accent);font-weight:600;cursor:pointer}
 .setup p{margin:0;color:var(--muted);font-size:12px;text-align:center}
 .hidden{display:none}
+
+/* view switcher */
+.views{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:20;display:flex;gap:2px;padding:3px;border-radius:999px;background:rgba(22,22,24,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.views button{font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:none;border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
+.views button.on{color:var(--text);background:#2a2a2e}
+
+/* decades: one column per decade, loops left/right, each column scrolls on its own */
+body.decade-view{overflow:hidden}
+.decades{--colw:clamp(150px,44vw,240px);position:fixed;inset:0;display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior:none}
+.decades::-webkit-scrollbar,.col::-webkit-scrollbar{display:none}
+.col{flex:0 0 var(--colw);height:100%;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior-y:contain}
+.col h2{position:sticky;top:0;z-index:2;margin:0;padding:16px 6px 12px;background:var(--bg);font:700 22px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:-.02em;cursor:pointer;user-select:none}
+.tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
+.tiles img,.ghost{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
+.tiles img{cursor:grab}
+.tiles img.placeholder{opacity:.15}
+.ghost{position:fixed;z-index:30;pointer-events:none;cursor:grabbing;box-shadow:0 18px 40px rgba(0,0,0,.6);transform:scale(1.04);transition:transform .12s}
+.empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -28,6 +46,11 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
   </form>
 </div>
 <main class="wall" id="wall"></main>
+<main class="decades hidden" id="decades"></main>
+<nav class="views hidden" id="views">
+  <button data-view="wall">Wall</button>
+  <button data-view="decades">Decades</button>
+</nav>
 
 <script>
 "use strict";
@@ -90,9 +113,10 @@ async function api(path, tries=0){
 
 /* ---------- the wall ---------- */
 const seen = new Set();
-function add(albums){
+const albums = []; // every album on the wall, in wall order
+function add(list){
   const frag = document.createDocumentFragment();
-  for (const a of albums){
+  for (const a of list){
     if (!a || !a.id || seen.has(a.id)) continue;
     seen.add(a.id);
     const imgs = a.images || [];
@@ -102,8 +126,11 @@ function add(albums){
     img.src = src; img.loading = "lazy"; img.alt = "";
     img.title = a.name + " · " + (a.artists || []).map(x => x.name).join(", ");
     frag.appendChild(img);
+    const year = parseInt((a.release_date || "").slice(0, 4), 10);
+    albums.push({ id: a.id, src, title: img.title, year: year > 1000 ? year : null });
   }
   $("#wall").appendChild(frag);
+  if (view === "decades") scheduleDecades();
 }
 const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
 
@@ -130,6 +157,174 @@ async function load(){
   }
 }
 
+/* ---------- views ---------- */
+let view = LS.get("view", "wall") === "decades" ? "decades" : "wall";
+function setView(v){
+  view = v; LS.set("view", v);
+  $("#wall").classList.toggle("hidden", v !== "wall");
+  $("#decades").classList.toggle("hidden", v !== "decades");
+  document.body.classList.toggle("decade-view", v === "decades");
+  for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
+  if (v === "decades") renderDecades();
+}
+$("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
+
+/* ---------- decades ---------- */
+const dec = $("#decades");
+let setW = 0;            // width of one full run of decade columns
+const colTop = {};       // remembered scroll position of each decade column
+const expected = new WeakMap(); // scroll positions we set ourselves (so copies don't echo back)
+let decTimer = 0;
+function scheduleDecades(){ clearTimeout(decTimer); decTimer = setTimeout(() => drag ? scheduleDecades() : renderDecades(), 250); }
+
+function decadeGroups(){
+  const g = new Map();
+  for (const a of albums){
+    if (!a.year) continue;
+    const d = Math.floor(a.year / 10) * 10;
+    if (!g.has(d)) g.set(d, []);
+    g.get(d).push(a);
+  }
+  return [...g.keys()].sort((x, y) => x - y).map(d => [d, ordered(d, g.get(d))]);
+}
+// albums you've dragged keep your order; albums new since then sit at the top
+function ordered(d, list){
+  const pos = new Map(LS.get("order." + d, []).map((id, i) => [id, i]));
+  return [...list.filter(a => !pos.has(a.id)), ...list.filter(a => pos.has(a.id)).sort((x, y) => pos.get(x.id) - pos.get(y.id))];
+}
+function column(d, list){
+  const col = document.createElement("section");
+  col.className = "col"; col.dataset.decade = d;
+  const h = document.createElement("h2"); h.textContent = d + "s";
+  const tiles = document.createElement("div"); tiles.className = "tiles";
+  for (const a of list){
+    const img = document.createElement("img");
+    img.src = a.src; img.alt = ""; img.title = a.title; img.dataset.id = a.id; img.draggable = false; img.loading = "lazy";
+    tiles.appendChild(img);
+  }
+  col.append(h, tiles);
+  return col;
+}
+function renderDecades(){
+  const groups = decadeGroups();
+  const offset = setW ? (dec.scrollLeft - setW) : 0;
+  dec.innerHTML = "";
+  if (!groups.length){ setW = 0; dec.innerHTML = albums.length ? '<p class="empty">No release years found.</p>' : ""; return; }
+  const set = () => { const f = document.createDocumentFragment(); for (const [d, list] of groups) f.appendChild(column(d, list)); return f; };
+  dec.appendChild(set());
+  const first = dec.firstElementChild;
+  setW = groups.length * (first.offsetWidth + parseFloat(getComputedStyle(dec).columnGap || 4));
+  // enough copies that we can always keep the view inside the second copy and still fill the screen
+  const copies = 3 + Math.ceil(dec.clientWidth / setW);
+  for (let i = 1; i < copies; i++) dec.appendChild(set());
+  for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
+  dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
+}
+function wrap(){
+  if (!setW) return;
+  if (dec.scrollLeft < setW) dec.scrollLeft += setW;
+  else if (dec.scrollLeft >= 2 * setW) dec.scrollLeft -= setW;
+}
+dec.addEventListener("scroll", e => {
+  const c = e.target;
+  if (c === dec) return wrap();
+  if (!c.classList || !c.classList.contains("col")) return;
+  if (expected.has(c) && Math.abs(expected.get(c) - c.scrollTop) < 1){ expected.delete(c); return; }
+  expected.delete(c);
+  colTop[c.dataset.decade] = c.scrollTop;
+  for (const o of dec.querySelectorAll(`.col[data-decade="${c.dataset.decade}"]`))
+    if (o !== c && Math.abs(o.scrollTop - c.scrollTop) >= 1){ o.scrollTop = c.scrollTop; expected.set(o, o.scrollTop); }
+}, true);
+dec.addEventListener("click", e => {
+  const h = e.target.closest(".col h2");
+  if (h) h.parentElement.scrollTo({ top: 0, behavior: "smooth" });
+});
+dec.addEventListener("contextmenu", e => { if (e.target.closest(".tiles img")) e.preventDefault(); });
+addEventListener("resize", () => { if (view === "decades") scheduleDecades(); });
+
+/* drag an album up or down its own column */
+let pending = null, drag = null;
+dec.addEventListener("pointerdown", e => {
+  const tile = e.target.closest(".tiles img");
+  if (!tile || e.button > 0 || drag) return;
+  if (e.pointerType === "mouse") e.preventDefault();
+  const p = pending = { tile, x: e.clientX, y: e.clientY, touch: e.pointerType !== "mouse" };
+  // on touch, press and hold to pick an album up; a plain swipe still scrolls
+  if (p.touch) p.timer = setTimeout(() => { if (pending === p) beginDrag(p); }, 300);
+});
+addEventListener("pointermove", e => {
+  if (drag){ drag.x = e.clientX; drag.y = e.clientY; return; }
+  if (!pending) return;
+  if (Math.hypot(e.clientX - pending.x, e.clientY - pending.y) > 6){
+    if (pending.touch){ clearTimeout(pending.timer); pending = null; }
+    else { pending.x = e.clientX; pending.y = e.clientY; beginDrag(pending); }
+  }
+});
+addEventListener("pointerup", endDrag);
+addEventListener("pointercancel", endDrag);
+document.addEventListener("touchmove", e => { if (drag) e.preventDefault(); }, { passive: false });
+
+function beginDrag(p){
+  pending = null;
+  const r = p.tile.getBoundingClientRect();
+  const ghost = p.tile.cloneNode();
+  ghost.className = "ghost";
+  Object.assign(ghost.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
+  document.body.appendChild(ghost);
+  p.tile.classList.add("placeholder");
+  if (navigator.vibrate) try{ navigator.vibrate(10); }catch{}
+  drag = { tile: p.tile, col: p.tile.closest(".col"), list: p.tile.parentElement, ghost, x: p.x, y: p.y, dy: p.y - r.top };
+  requestAnimationFrame(dragFrame);
+}
+function dragFrame(){
+  if (!drag) return;
+  const { col, list, tile, ghost, y } = drag;
+  const cr = col.getBoundingClientRect();
+  const head = col.querySelector("h2").offsetHeight;
+  // keep the album in its column, and scroll the column when you hold it near the top or bottom
+  ghost.style.left = cr.left + "px";
+  ghost.style.top = Math.max(cr.top + head, Math.min(cr.bottom - drag.ghost.offsetHeight / 2, y - drag.dy)) + "px";
+  const edge = 70;
+  if (y < cr.top + head + edge) col.scrollTop -= Math.ceil((cr.top + head + edge - y) / 6);
+  else if (y > cr.bottom - edge) col.scrollTop += Math.ceil((y - (cr.bottom - edge)) / 6);
+  // find where it would land and slide the others out of the way
+  const gr = ghost.getBoundingClientRect(), mid = gr.top + gr.height / 2;
+  let before = null;
+  for (const el of list.children){
+    if (el === tile) continue;
+    const r = el.getBoundingClientRect();
+    if (mid < r.top + r.height / 2){ before = el; break; }
+  }
+  if (tile.nextElementSibling !== before && before !== tile){
+    const kids = [...list.children], old = new Map(kids.map(k => [k, k.getBoundingClientRect().top]));
+    list.insertBefore(tile, before);
+    for (const k of kids){
+      const dy = old.get(k) - k.getBoundingClientRect().top;
+      if (!dy || k === tile) continue;
+      k.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 160, easing: "ease-out" });
+    }
+  }
+  requestAnimationFrame(dragFrame);
+}
+function endDrag(){
+  if (pending){ clearTimeout(pending.timer); pending = null; }
+  if (!drag) return;
+  const { tile, list, ghost, col } = drag;
+  drag = null;
+  const r = tile.getBoundingClientRect();
+  ghost.style.transition = "top .15s, left .15s, transform .15s";
+  Object.assign(ghost.style, { top: r.top + "px", left: r.left + "px", transform: "none" });
+  setTimeout(() => { ghost.remove(); tile.classList.remove("placeholder"); }, 150);
+  const ids = [...list.children].map(k => k.dataset.id);
+  LS.set("order." + col.dataset.decade, ids);
+  // the same decade appears in every copy of the loop; give them the same order
+  for (const other of dec.querySelectorAll(`.col[data-decade="${col.dataset.decade}"] .tiles`)){
+    if (other === list) continue;
+    const byId = new Map([...other.children].map(k => [k.dataset.id, k]));
+    for (const id of ids) if (byId.has(id)) other.appendChild(byId.get(id));
+  }
+}
+
 function showSetup(msg){
   $("#setup").classList.remove("hidden");
   if (CLIENT_ID){ $("#clientId").value = CLIENT_ID; $("#clientId").classList.add("hidden"); $("#help").classList.add("hidden"); }
@@ -148,18 +343,21 @@ $("#form").onsubmit = async e => {
 };
 
 (async () => {
+  const startViews = () => { $("#views").classList.remove("hidden"); setView(view); };
   if (new URLSearchParams(location.search).has("demo")){
     const fake = Array.from({length: 240}, (_, i) => {
       const c = document.createElement("canvas"); c.width = c.height = 64;
       const g = c.getContext("2d"); g.fillStyle = `hsl(${(i * 47) % 360},45%,${35 + (i % 5) * 8}%)`; g.fillRect(0, 0, 64, 64);
-      return { id: "d" + i, name: "Album " + (i + 1), artists: [{ name: "Artist" }], images: [{ url: c.toDataURL() }] };
+      return { id: "d" + i, name: "Album " + (i + 1), artists: [{ name: "Artist" }], images: [{ url: c.toDataURL() }],
+        release_date: String(1962 + (i * 37) % 64) };
     });
-    add(fake); return;
+    startViews(); add(fake); return;
   }
   try { await handleRedirect(); } catch(e){ return showSetup(e.message); }
   if (!LS.get("token")) return showSetup();
+  startViews();
   try { await load(); }
-  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; seen.clear(); showSetup(e.message); }
+  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; seen.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
 </script>
 </body>
