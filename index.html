@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
 <style>
-:root{ --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
+:root{ --rank:#ffd400; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
@@ -27,10 +27,12 @@ body.decade-view{overflow:hidden}
 .decades{--colw:clamp(150px,44vw,240px);position:fixed;inset:0;display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior:none}
 .decades::-webkit-scrollbar,.col::-webkit-scrollbar{display:none}
 .col{flex:0 0 var(--colw);height:100%;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior-y:contain}
-.col h2{position:sticky;top:0;z-index:2;margin:0;padding:16px 6px 12px;background:var(--bg);font:700 22px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:-.02em;cursor:pointer;user-select:none}
+.col h2{position:sticky;top:0;z-index:2;margin:0;padding:16px 10px 12px;background:var(--bg);text-align:center;white-space:nowrap;overflow:hidden;font:700 26px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;cursor:pointer;user-select:none;transition:color .15s}
+.col h2 span{display:inline-block;transform-origin:center}
+.col.rank h2{color:var(--rank)}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
 .tiles img,.ghost{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
-.tiles img{cursor:grab}
+.col.rank .tiles img{cursor:grab}
 .tiles img.placeholder{opacity:.15}
 .ghost{position:fixed;z-index:30;pointer-events:none;cursor:grabbing;box-shadow:0 18px 40px rgba(0,0,0,.6);transform:scale(1.04);transition:transform .12s}
 .empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
@@ -128,7 +130,7 @@ function add(list){
     frag.appendChild(img);
     const year = parseInt((a.release_date || "").slice(0, 4), 10);
     const al = { id: a.id, src, title: img.title, name: a.name || "", artist: (a.artists || [])[0]?.name || "",
-      released: year > 1000 ? year : null, fromTitle: titleYear(a.name || "") };
+      released: year > 1000 ? year : null, date: a.release_date || "", fromTitle: titleYear(a.name || "") };
     settleYear(al);
     albums.push(al);
   }
@@ -254,25 +256,50 @@ function decadeGroups(){
     if (!g.has(d)) g.set(d, []);
     g.get(d).push(a);
   }
-  return [...g.keys()].sort((x, y) => x - y).map(d => [d, ordered(d, g.get(d))]);
+  return [...g.keys()].sort((x, y) => x - y).map(d => [d, g.get(d)]);
+}
+// each decade is either in release order (white) or your own ranking (yellow, draggable)
+const isRanked = d => LS.get("mode." + d) === "rank";
+function chronological(list){
+  const key = a => a.year + (a.year === a.released ? a.date.slice(4) : "") + " " + a.name.toLowerCase();
+  return [...list].sort((x, y) => key(x).localeCompare(key(y)));
 }
 // albums you've dragged keep your order; albums new since then sit at the top
-function ordered(d, list){
+function ranked(d, list){
   const pos = new Map(LS.get("order." + d, []).map((id, i) => [id, i]));
   return [...list.filter(a => !pos.has(a.id)), ...list.filter(a => pos.has(a.id)).sort((x, y) => pos.get(x.id) - pos.get(y.id))];
 }
-function column(d, list){
-  const col = document.createElement("section");
-  col.className = "col"; col.dataset.decade = d;
-  const h = document.createElement("h2"); h.textContent = d + "s";
-  const tiles = document.createElement("div"); tiles.className = "tiles";
-  for (const a of list){
+function fillTiles(tiles, d, list){
+  tiles.textContent = "";
+  for (const a of isRanked(d) ? ranked(d, list) : chronological(list)){
     const img = document.createElement("img");
     img.src = a.src; img.alt = ""; img.title = a.title; img.dataset.id = a.id; img.draggable = false; img.loading = "lazy";
     tiles.appendChild(img);
   }
+}
+function column(d, list){
+  const col = document.createElement("section");
+  col.className = "col" + (isRanked(d) ? " rank" : ""); col.dataset.decade = d;
+  const h = document.createElement("h2"), label = document.createElement("span");
+  label.textContent = d + "s"; h.appendChild(label);
+  const tiles = document.createElement("div"); tiles.className = "tiles";
+  fillTiles(tiles, d, list);
   col.append(h, tiles);
   return col;
+}
+// stretch each decade title sideways so it spans its column
+function stretchTitles(){
+  const scale = {};
+  for (const span of dec.querySelectorAll(".col h2 span")){
+    const d = span.closest(".col").dataset.decade;
+    if (!(d in scale)){
+      span.style.transform = "";
+      const h = span.parentElement, cs = getComputedStyle(h);
+      const room = h.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      scale[d] = Math.max(1, room / span.offsetWidth);
+    }
+    span.style.transform = `scaleX(${scale[d]})`;
+  }
 }
 function renderDecades(){
   const groups = decadeGroups();
@@ -286,6 +313,7 @@ function renderDecades(){
   // enough copies that we can always keep the view inside the second copy and still fill the screen
   const copies = 3 + Math.ceil(dec.clientWidth / setW);
   for (let i = 1; i < copies; i++) dec.appendChild(set());
+  stretchTitles();
   for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
   dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
 }
@@ -306,7 +334,17 @@ dec.addEventListener("scroll", e => {
 }, true);
 dec.addEventListener("click", e => {
   const h = e.target.closest(".col h2");
-  if (h) h.parentElement.scrollTo({ top: 0, behavior: "smooth" });
+  if (!h) return;
+  // switch this decade between release order and your ranking, and go back to the top
+  const d = h.parentElement.dataset.decade, rank = !isRanked(d);
+  LS.set("mode." + d, rank ? "rank" : "chrono");
+  const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
+  for (const c of dec.querySelectorAll(`.col[data-decade="${d}"]`)){
+    c.classList.toggle("rank", rank);
+    fillTiles(c.querySelector(".tiles"), d, list);
+    c.scrollTop = 0; expected.set(c, 0);
+  }
+  colTop[d] = 0;
 });
 dec.addEventListener("contextmenu", e => { if (e.target.closest(".tiles img")) e.preventDefault(); });
 addEventListener("resize", () => { if (view === "decades") scheduleDecades(); });
@@ -314,7 +352,7 @@ addEventListener("resize", () => { if (view === "decades") scheduleDecades(); })
 /* drag an album up or down its own column */
 let pending = null, drag = null;
 dec.addEventListener("pointerdown", e => {
-  const tile = e.target.closest(".tiles img");
+  const tile = e.target.closest(".col.rank .tiles img");
   if (!tile || e.button > 0 || drag) return;
   if (e.pointerType === "mouse") e.preventDefault();
   const p = pending = { tile, x: e.clientX, y: e.clientY, touch: e.pointerType !== "mouse" };
