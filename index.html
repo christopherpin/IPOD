@@ -132,6 +132,8 @@ const better = (x, y) => isReissue(x.name) !== isReissue(y.name) ? !isReissue(x.
 function add(list){
   for (const a of list){
     if (!a || !a.id || seen.has(a.id)) continue;
+    // albums, EPs and compilations only: Spotify calls EPs "singles" too, but a real single has 1 to 3 tracks
+    if (a.album_type === "single" && (a.total_tracks || 0) <= 3) continue;
     seen.add(a.id);
     const imgs = a.images || [];
     const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url;
@@ -200,10 +202,11 @@ async function load(){
 /* ---------- original release years ---------- */
 // Spotify dates a reissue by the reissue ("Remastered 2019"); a year in the title
 // ("On Guitar 1955-1962") wins when it's earlier.
-const REISSUE = /remaster|deluxe|edition|anniversary|expanded|reissue|version|mono|stereo|bonus|re-?mix|legacy|collector/i;
+const REISSUE = /remaster|deluxe|edition|anniversary|expanded|reissue|version|mono|stereo|bonus|re-?mix|legacy|collector|explicit|clean|special|super|complete|definitive|platinum|extended/i;
 function cleanTitle(t){
   return t.replace(/\s*[(\[]([^)\]]*)[)\]]/g, (m, inner) => REISSUE.test(inner) ? "" : m)
-          .replace(/\s+[-\u2013\u2014:]\s+[^-\u2013\u2014:]*$/, m => REISSUE.test(m) ? "" : m).trim();
+          .replace(/\s+[-\u2013\u2014:]\s+[^-\u2013\u2014:]*$/, m => REISSUE.test(m) ? "" : m)
+          .replace(/\s+(super\s+)?(deluxe|expanded|remastered)(\s+(edition|version))?$/i, "").trim();
 }
 function titleYear(t){
   const c = cleanTitle(t);
