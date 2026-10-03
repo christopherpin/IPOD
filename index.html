@@ -707,9 +707,10 @@ function decadeGroups(){
 }
 // each decade is either in release order (white) or your own ranking (yellow, draggable)
 const isRanked = d => LS.get("mode." + d) === "rank";
+// release order, newest first (same-day releases go A to Z)
 function chronological(list){
-  const key = a => a.year + (a.year === a.released ? a.date.slice(4) : "") + " " + a.name.toLowerCase();
-  return [...list].sort((x, y) => key(x).localeCompare(key(y)));
+  const when = a => a.year + (a.year === a.released ? a.date.slice(4) : "");
+  return [...list].sort((x, y) => when(y).localeCompare(when(x)) || x.name.toLowerCase().localeCompare(y.name.toLowerCase()));
 }
 // albums you've dragged keep your order; albums new since then sit at the top
 function ranked(d, list){
