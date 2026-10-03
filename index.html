@@ -158,6 +158,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="queue">Add To Queue</button>
 </div>
 <div class="menu hidden" id="qmenu">
+  <button data-act="spotify">Queue On Spotify</button>
   <button data-act="first">Move To Front</button>
   <button data-act="remove">Remove From Queue</button>
 </div>
@@ -182,7 +183,7 @@ const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const CLIENT_ID = "813caa88dc414f8b8c3dd58c09e55c9f"; // set to your Spotify app's Client ID to skip typing it
 const REDIRECT = location.origin + location.pathname;
-const SCOPES = "user-read-recently-played user-top-read user-library-read";
+const SCOPES = "user-read-recently-played user-top-read user-library-read user-modify-playback-state";
 
 /* ---------- auth (PKCE) ---------- */
 function b64url(bytes){ return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
@@ -201,7 +202,7 @@ async function tokenRequest(params){
   const j = await r.json();
   if (!r.ok) throw new Error(j.error_description || j.error || "Token request failed");
   const prev = LS.get("token", {});
-  const tok = { access: j.access_token, refresh: j.refresh_token || prev.refresh, exp: Date.now() + (j.expires_in - 60) * 1000 };
+  const tok = { access: j.access_token, refresh: j.refresh_token || prev.refresh, exp: Date.now() + (j.expires_in - 60) * 1000, scope: j.scope || prev.scope || "" };
   LS.set("token", tok); return tok;
 }
 async function handleRedirect(){
@@ -685,6 +686,10 @@ $("#qbody").addEventListener("contextmenu", e => {
   if (!t) return;
   e.preventDefault();
   qmenuFor = t.dataset.key;
+  // only albums Spotify has can go into your Spotify queue
+  const it = queueList().find(x => x.key === qmenuFor), sb = qmenu.querySelector('[data-act="spotify"]');
+  sb.classList.toggle("hidden", !spotifyAlbumId(it));
+  sb.disabled = false; sb.textContent = "Queue On Spotify";
   qmenu.classList.remove("hidden");
   qmenu.style.left = Math.min(e.clientX, innerWidth - qmenu.offsetWidth - 4) + "px";
   qmenu.style.top = Math.min(e.clientY, innerHeight - qmenu.offsetHeight - 4) + "px";
@@ -692,11 +697,46 @@ $("#qbody").addEventListener("contextmenu", e => {
 qmenu.onclick = e => {
   const act = e.target.closest("button")?.dataset.act, key = qmenuFor;
   if (!act || !key) return;
+  if (act === "spotify"){ queueOnSpotify(e.target.closest("button"), key); return; }
   closeQmenu();
   const list = queueList(), it = list.find(x => x.key === key), rest = list.filter(x => x.key !== key);
   LS.set(QUEUE, act === "first" ? [it, ...rest] : rest);
   renderQueue();
 };
+const spotifyAlbumId = it => ((it?.url || "").match(/open\.spotify\.com\/album\/([A-Za-z0-9]+)/) || [])[1] || null;
+// Adds every track of the album to whatever Spotify is playing on right now, in order.
+// The button itself says how it went, so nothing else pops up.
+async function queueOnSpotify(btn, key){
+  if (btn.disabled) return;
+  const say = text => { if (qmenuFor === key) btn.textContent = text; };
+  const id = spotifyAlbumId(queueList().find(x => x.key === key));
+  if (!id) return;
+  if (!/user-modify-playback-state/.test(LS.get("token")?.scope || "")){
+    // one-time: Spotify has to be asked again for permission to add to your queue
+    btn.disabled = true; say("Connecting To Spotify…");
+    return startLogin(LS.get("clientId") || CLIENT_ID).catch(() => { btn.disabled = false; say("Couldn't Reach Spotify"); });
+  }
+  btn.disabled = true; say("Adding…");
+  try {
+    const uris = [];
+    for (let path = `/albums/${id}/tracks?limit=50`; path; ){
+      const j = await api(path);
+      uris.push(...(j.items || []).map(t => t.uri).filter(Boolean));
+      path = j.next;
+    }
+    for (let i = 0; i < uris.length; i++){
+      const tok = await accessToken();
+      const r = await fetch("https://api.spotify.com/v1/me/player/queue?uri=" + encodeURIComponent(uris[i]), { method: "POST", headers: { Authorization: "Bearer " + tok } });
+      if (r.status === 429){ await sleep((+r.headers.get("Retry-After") || 2) * 1000); i--; continue; } // same track again
+      if (r.status === 404) throw new Error("Open Spotify And Play Something First");
+      if (r.status === 403) throw new Error("Needs Spotify Premium");
+      if (r.status === 401){ const t = LS.get("token"); if (t){ t.scope = ""; LS.set("token", t); } throw new Error("Try Again To Reconnect Spotify"); }
+      if (!r.ok) throw new Error("Spotify Didn't Answer");
+    }
+    say("Queued On Spotify ✓");
+    setTimeout(() => { if (qmenuFor === key) closeQmenu(); }, 1200);
+  } catch(err){ say(err.message || "Spotify Didn't Answer"); }
+}
 addEventListener("pointerdown", e => { if (!e.target.closest("#qmenu")) closeQmenu(); }, true);
 addEventListener("keydown", e => { if (e.key === "Escape") closeQmenu(); });
 addEventListener("wheel", closeQmenu, { passive: true });
