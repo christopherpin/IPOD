@@ -2,6 +2,10 @@
 body.ipod-view{overflow:hidden}
 .ipod{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding-bottom:52px;background:radial-gradient(ellipse at 50% 40%,#1b1b1e 0%,var(--bg) 70%)}
 .ipod *{box-sizing:border-box}
+/* keep clear of the tab bar wherever it is docked */
+body.dock-top .ipod{padding:var(--dock) 0 0}
+body.dock-left .ipod{padding:0 0 0 var(--dock)}
+body.dock-right .ipod{padding:0 var(--dock) 0 0}
 .ip-fit{position:relative;flex:none}
 .ip-device{position:absolute;left:0;top:0;width:370px;height:660px;transform-origin:0 0;border-radius:52px;padding:5px;
   background:linear-gradient(145deg,#f4f4f6 0%,#9a9ca2 18%,#e7e8ea 38%,#7d8086 62%,#d9dadd 82%,#8c8e93 100%);

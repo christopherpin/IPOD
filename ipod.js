@@ -58,7 +58,10 @@ function shell(){
 /* ---------- fitting the device to the window ---------- */
 function fit(){
   if (!root || root.classList.contains("hidden")) return;
-  const s = Math.min(1.25, (innerWidth - 24) / W, (innerHeight - 76) / H);
+  const cs = getComputedStyle(root);
+  const w = root.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+  const h = root.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 24;
+  const s = Math.min(1.25, w / W, h / H);
   const box = root.querySelector(".ip-fit");
   box.style.width = W * s + "px"; box.style.height = H * s + "px";
   root.querySelector(".ip-device").style.transform = `scale(${s})`;
@@ -66,6 +69,8 @@ function fit(){
 }
 let scale = 1;
 addEventListener("resize", fit);
+// the site's tab bar can be docked to any edge; refit when it moves
+new MutationObserver(() => fit()).observe(document.body, { attributes: true, attributeFilter: ["class", "style"] });
 
 function clock(){
   const t = root.querySelector(".ip-status .t");

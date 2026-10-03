@@ -23,6 +23,23 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .views button{font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:none;border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
 .views button.on{color:var(--text);background:#2a2a2e}
 @media (max-width:520px){.views button{padding:8px 7px;font-size:11px}}
+/* the bar can be dragged to any edge; it snaps to the nearest one and stays there (wall.dock) */
+.views{touch-action:none;user-select:none;-webkit-user-select:none}
+.views.dock-top{bottom:auto;top:14px}
+.views.dock-left,.views.dock-right{bottom:auto;top:50%;transform:translateY(-50%);flex-direction:column;border-radius:18px}
+.views.dock-left{left:14px}
+.views.dock-right{left:auto;right:14px}
+.views.dock-left button,.views.dock-right button{text-align:left}
+.views.dragging{transform:none;transition:none;cursor:grabbing;box-shadow:0 18px 40px rgba(0,0,0,.6)}
+.views.dragging button{cursor:grabbing}
+/* keep the edge under the bar clear, so nothing important hides behind it */
+body.dock-top .wall,body.dock-top .pantheon{padding-top:var(--dock)}
+body.dock-top .qbar{padding-top:var(--dock)}
+body.dock-top .decades{top:var(--dock)}
+body.dock-left .wall,body.dock-left .pantheon,body.dock-left .queue{padding-left:var(--dock)}
+body.dock-left .decades{left:var(--dock)}
+body.dock-right .wall,body.dock-right .pantheon,body.dock-right .queue{padding-right:var(--dock)}
+body.dock-right .decades{right:var(--dock)}
 
 /* decades: one column per decade, loops left/right, each column scrolls on its own */
 body.decade-view{overflow:hidden}
@@ -689,7 +706,60 @@ function setView(v){
   if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
 }
-$("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
+$("#views").onclick = e => { const b = e.target.closest("button"); if (b && !barMoved) setView(b.dataset.view); };
+
+/* ---------- tab bar: drag it to any edge, it snaps to the nearest and remembers ---------- */
+const bar = $("#views");
+const SIDES = ["top", "bottom", "left", "right"];
+let dock = SIDES.includes(LS.get("dock")) ? LS.get("dock") : "bottom";
+let barMoved = false;
+function measureDock(){
+  if (bar.classList.contains("hidden")) return;
+  const r = bar.getBoundingClientRect(), gap = 10;
+  const size = dock === "top" ? r.bottom + gap : dock === "left" ? r.right + gap : dock === "right" ? innerWidth - r.left + gap : 0;
+  document.body.style.setProperty("--dock", Math.ceil(size) + "px");
+}
+function applyDock(){
+  for (const s of SIDES){ bar.classList.toggle("dock-" + s, s === dock && s !== "bottom"); document.body.classList.toggle("dock-" + s, s === dock && s !== "bottom"); }
+  measureDock();
+}
+applyDock();
+addEventListener("resize", measureDock);
+bar.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  const r0 = bar.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
+  const ox = sx - r0.left, oy = sy - r0.top;
+  let dragging = false, lx = sx, ly = sy;
+  barMoved = false;
+  e.preventDefault(); // no text selection or native drag while moving the bar
+  const move = ev => {
+    if (!dragging){
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+      dragging = barMoved = true;
+      bar.classList.add("dragging");
+      try{ bar.setPointerCapture(e.pointerId); }catch{}
+    }
+    lx = ev.clientX; ly = ev.clientY;
+    bar.style.left = (ev.clientX - ox) + "px"; bar.style.top = (ev.clientY - oy) + "px";
+    bar.style.right = bar.style.bottom = "auto";
+  };
+  const up = ev => {
+    removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up);
+    if (!dragging) return;
+    const x = lx, y = ly; // last pointer position (a cancelled pointer reports 0,0)
+    const d = { top: y, bottom: innerHeight - y, left: x, right: innerWidth - x };
+    dock = SIDES.reduce((a, b) => d[b] < d[a] ? b : a);
+    LS.set("dock", dock);
+    const from = bar.getBoundingClientRect();
+    bar.classList.remove("dragging"); bar.removeAttribute("style");
+    applyDock();
+    // glide from where it was let go into its snapped place
+    const to = bar.getBoundingClientRect();
+    if (bar.animate) bar.animate([{ translate: `${from.left - to.left}px ${from.top - to.top}px` }, { translate: "0 0" }], { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" });
+    setTimeout(() => { barMoved = false; }, 0);
+  };
+  addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up);
+});
 
 /* ---------- iPod (ipod.js) ---------- */
 function showIpod(){
@@ -1034,7 +1104,7 @@ $("#form").onsubmit = async e => {
 };
 
 (async () => {
-  const startViews = () => { $("#views").classList.remove("hidden"); setView(view); };
+  const startViews = () => { $("#views").classList.remove("hidden"); measureDock(); setView(view); };
   if (new URLSearchParams(location.search).has("demo")){
     const fake = Array.from({length: 240}, (_, i) => {
       const c = document.createElement("canvas"); c.width = c.height = 64;
