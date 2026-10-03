@@ -366,8 +366,17 @@ $("#toTop").onclick = () => {
   const { id, d } = menuFor;
   closeMenu();
   const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
-  LS.set("order." + d, [id, ...ranked(d, list).map(a => a.id).filter(x => x !== id)]);
-  showDecade(d, true);
+  const before = ranked(d, list).map(a => a.id);
+  LS.set("order." + d, [id, ...before.filter(x => x !== id)]);
+  if (!isRanked(d)) return; // release order on screen: the ranking changes quietly, nothing moves
+  // stay where you are: the albums above it each slide down one place, so scroll down one place too
+  const moved = before.indexOf(id) > 0;
+  for (const c of dec.querySelectorAll(`.col[data-decade="${d}"]`)){
+    const tiles = c.querySelector(".tiles"), step = moved ? tiles.firstElementChild.offsetHeight + 4 : 0, top = c.scrollTop;
+    fillTiles(tiles, d, list);
+    c.scrollTop = top + step; expected.set(c, c.scrollTop);
+  }
+  colTop[d] = (colTop[d] || 0) + (moved ? 1 : 0) * (dec.querySelector(`.col[data-decade="${d}"] .tiles img`).offsetHeight + 4);
 };
 addEventListener("pointerdown", e => { if (!e.target.closest("#menu")) closeMenu(); }, true);
 addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
