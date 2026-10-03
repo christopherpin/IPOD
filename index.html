@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
+<link rel="stylesheet" href="ipod.css">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -21,6 +22,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .views{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:20;display:flex;gap:2px;padding:3px;border-radius:999px;background:rgba(22,22,24,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 .views button{font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:none;border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
 .views button.on{color:var(--text);background:#2a2a2e}
+@media (max-width:520px){.views button{padding:8px 7px;font-size:11px}}
 
 /* decades: one column per decade, loops left/right, each column scrolls on its own */
 body.decade-view{overflow:hidden}
@@ -95,6 +97,7 @@ body.decade-view{overflow:hidden}
   <div class="qbar"><input id="qsearch" type="search" placeholder="Search for an album" autocomplete="off" spellcheck="false"></div>
   <div id="qbody"></div>
 </main>
+<main class="ipod hidden" id="ipod"></main>
 <div class="setup hidden" id="waxSetup">
   <form id="waxForm">
     <input id="waxUser" placeholder="Discogs username" autocomplete="off" spellcheck="false">
@@ -117,8 +120,10 @@ body.decade-view{overflow:hidden}
   <button data-view="pantheon">Pantheon</button>
   <button data-view="wax">Wax</button>
   <button data-view="queue">Queue</button>
+  <button data-view="ipod">iPod</button>
 </nav>
 
+<script src="ipod.js"></script>
 <script>
 "use strict";
 const LS = {
@@ -351,6 +356,7 @@ function ready(){
   renderWall();
   if (view === "decades") renderDecades();
   if (view === "pantheon") renderPantheon();
+  if (view === "ipod") showIpod();
 }
 const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
 
@@ -666,7 +672,7 @@ async function findOnSpotify(rec){
 }
 
 /* ---------- views ---------- */
-let view = ["wall", "decades", "pantheon", "wax", "queue"].includes(LS.get("view")) ? LS.get("view") : "wall";
+let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
   view = v; LS.set("view", v);
   $("#wall").classList.toggle("hidden", v !== "wall");
@@ -674,6 +680,8 @@ function setView(v){
   $("#pantheon").classList.toggle("hidden", v !== "pantheon");
   $("#wax").classList.toggle("hidden", v !== "wax");
   $("#queue").classList.toggle("hidden", v !== "queue");
+  if (v === "ipod") showIpod(); else $("#ipod").classList.add("hidden");
+  document.body.classList.toggle("ipod-view", v === "ipod");
   if (v === "queue"){ renderQueue(); if (matchMedia("(pointer: fine)").matches) $("#qsearch").focus({ preventScroll: true }); }
   if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
@@ -682,6 +690,13 @@ function setView(v){
   if (v === "pantheon") renderPantheon();
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
+
+/* ---------- iPod (ipod.js) ---------- */
+function showIpod(){
+  if (!loaded) return; // drawn once every album is in
+  IPod.show($("#ipod"), { albums, clean: cleanTitle,
+    playlists: () => [{ name: "Pantheon", albums: pantheon().slots.filter(Boolean).map(byAnyId).filter(Boolean) }] });
+}
 
 /* ---------- decades ---------- */
 const dec = $("#decades");
@@ -843,14 +858,14 @@ let menuFor = null;
 function closeMenu(){ menu.classList.add("hidden"); menuFor = null; }
 const decadeOf = a => a.year ? Math.floor(a.year / 10) * 10 : null;
 document.addEventListener("contextmenu", e => {
-  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img");
+  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id]");
   if (!tile) return;
   e.preventDefault();
   if (drag) return;
   // a Wax record stands in for its Spotify version, which is looked up straight away
   const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id);
   if (rec) rec.wax = true;
-  const album = rec || (tile.closest("#pantheon") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
+  const album = rec || (tile.closest("#pantheon, #ipod") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
   if (!album) return;
   menuFor = album;
   const d = rec ? null : decadeOf(album);
