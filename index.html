@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Albums</title>
+<style>
+:root{ --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
+.wall img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile)}
+.setup{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+.setup form{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px}
+.setup input,.setup button{font:inherit;color:inherit;border-radius:999px;padding:10px 16px;border:1px solid #2a2a2e;background:var(--tile)}
+.setup button{background:var(--accent);color:#04170a;border-color:var(--accent);font-weight:600;cursor:pointer}
+.setup p{margin:0;color:var(--muted);font-size:12px;text-align:center}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="setup hidden" id="setup">
+  <form id="form">
+    <input id="clientId" placeholder="Spotify Client ID" autocomplete="off" spellcheck="false">
+    <button type="submit">Connect Spotify</button>
+    <p id="msg"></p>
+    <p>Get a Client ID: open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener" style="color:var(--accent)">developer.spotify.com/dashboard</a>, create an app, tick Web API, and add the Redirect URI <b id="redir"></b>. Then copy the app's Client ID here.</p>
+  </form>
+</div>
+<main class="wall" id="wall"></main>
+
+<script>
+"use strict";
+const LS = {
+  get(k, d=null){ try{ const v = localStorage.getItem("wall."+k); return v==null ? d : JSON.parse(v); }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem("wall."+k, JSON.stringify(v)); }catch{} },
+  del(k){ try{ localStorage.removeItem("wall."+k); }catch{} }
+};
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const REDIRECT = location.origin + location.pathname;
+const SCOPES = "user-read-recently-played user-top-read user-library-read";
+
+/* ---------- auth (PKCE) ---------- */
+function b64url(bytes){ return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+async function startLogin(clientId){
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(64)));
+  const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  LS.set("verifier", verifier); LS.set("state", state); LS.set("clientId", clientId);
+  const p = new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: REDIRECT,
+    code_challenge_method: "S256", code_challenge: challenge, scope: SCOPES, state });
+  location.href = "https://accounts.spotify.com/authorize?" + p;
+}
+async function tokenRequest(params){
+  const r = await fetch("https://accounts.spotify.com/api/token", { method:"POST",
+    headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: new URLSearchParams(params) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error_description || j.error || "Token request failed");
+  const prev = LS.get("token", {});
+  const tok = { access: j.access_token, refresh: j.refresh_token || prev.refresh, exp: Date.now() + (j.expires_in - 60) * 1000 };
+  LS.set("token", tok); return tok;
+}
+async function handleRedirect(){
+  const q = new URLSearchParams(location.search);
+  if (!q.has("code") && !q.has("error")) return;
+  history.replaceState(null, "", REDIRECT);
+  if (q.get("error")) throw new Error("Spotify said: " + q.get("error"));
+  if (q.get("state") !== LS.get("state")) throw new Error("Login state mismatch, please try again.");
+  await tokenRequest({ grant_type:"authorization_code", code:q.get("code"), redirect_uri:REDIRECT,
+    client_id:LS.get("clientId"), code_verifier:LS.get("verifier") });
+  LS.del("verifier"); LS.del("state");
+}
+async function accessToken(){
+  let t = LS.get("token");
+  if (!t) return null;
+  if (Date.now() > t.exp && t.refresh) t = await tokenRequest({ grant_type:"refresh_token", refresh_token:t.refresh, client_id:LS.get("clientId") });
+  return t.access;
+}
+async function api(path, tries=0){
+  const tok = await accessToken();
+  const r = await fetch(path.startsWith("http") ? path : "https://api.spotify.com/v1" + path, { headers:{ Authorization:"Bearer "+tok } });
+  if (r.status === 429 && tries < 4){ await sleep((+r.headers.get("Retry-After") || 2) * 1000); return api(path, tries+1); }
+  if (r.status === 401 && tries < 1){ const t = LS.get("token"); if (t){ t.exp = 0; LS.set("token", t); } return api(path, tries+1); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok){ const e = new Error((j.error && j.error.message) || ("Spotify error " + r.status)); e.status = r.status; throw e; }
+  return j;
+}
+
+/* ---------- the wall ---------- */
+const seen = new Set();
+function add(albums){
+  const frag = document.createDocumentFragment();
+  for (const a of albums){
+    if (!a || !a.id || seen.has(a.id)) continue;
+    seen.add(a.id);
+    const imgs = a.images || [];
+    const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url;
+    if (!src) continue;
+    const img = document.createElement("img");
+    img.src = src; img.loading = "lazy"; img.alt = "";
+    img.title = a.name + " · " + (a.artists || []).map(x => x.name).join(", ");
+    frag.appendChild(img);
+  }
+  $("#wall").appendChild(frag);
+}
+const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
+
+async function load(){
+  // 1. last 50 plays, newest first
+  const recent = await safe("/me/player/recently-played?limit=50");
+  add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
+
+  // 2. top tracks: 4 weeks, 6 months, all time (up to 99 each)
+  const ranges = ["short_term", "medium_term", "long_term"];
+  const tops = await Promise.all(ranges.map(r => Promise.all([
+    safe(`/me/top/tracks?time_range=${r}&limit=50`),
+    safe(`/me/top/tracks?time_range=${r}&limit=50&offset=49`)
+  ])));
+  for (const pages of tops) for (const p of pages) add((p?.items || []).map(t => t.album));
+
+  // 3. saved albums, most recently saved first
+  let next = "/me/albums?limit=50";
+  while (next){
+    const p = await safe(next);
+    if (!p) break;
+    add((p.items || []).map(i => i.album));
+    next = p.next;
+  }
+}
+
+function showSetup(msg){
+  $("#setup").classList.remove("hidden");
+  $("#clientId").value = LS.get("clientId") || (() => { try{ return JSON.parse(localStorage.getItem("curator.clientId")) || ""; }catch{ return ""; } })();
+  $("#msg").textContent = msg || "";
+  $("#redir").textContent = REDIRECT;
+}
+const WRONG_PLACE = location.protocol === "file:" || window.top !== window || !/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && location.protocol !== "https:";
+$("#form").onsubmit = async e => {
+  e.preventDefault();
+  const id = $("#clientId").value.trim();
+  if (!id) return void ($("#msg").textContent = "Paste your Client ID first.");
+  if (WRONG_PLACE) return void ($("#msg").textContent = "This page can't sign in from here. Open http://127.0.0.1:8888/ in your browser after starting the local server.");
+  $("#msg").textContent = "Opening Spotify…";
+  try { await startLogin(id); } catch(err){ $("#msg").textContent = "Couldn't start sign-in: " + err.message; }
+};
+
+(async () => {
+  if (new URLSearchParams(location.search).has("demo")){
+    const fake = Array.from({length: 240}, (_, i) => {
+      const c = document.createElement("canvas"); c.width = c.height = 64;
+      const g = c.getContext("2d"); g.fillStyle = `hsl(${(i * 47) % 360},45%,${35 + (i % 5) * 8}%)`; g.fillRect(0, 0, 64, 64);
+      return { id: "d" + i, name: "Album " + (i + 1), artists: [{ name: "Artist" }], images: [{ url: c.toDataURL() }] };
+    });
+    add(fake); return;
+  }
+  try { await handleRedirect(); } catch(e){ return showSetup(e.message); }
+  if (!LS.get("token")) return showSetup();
+  try { await load(); }
+  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; seen.clear(); showSetup(e.message); }
+})();
+</script>
+</body>
+</html>
