@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
 <style>
-:root{ --rank:#ffd400; --rank-dark:#a88a00; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
+:root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
@@ -31,7 +31,9 @@ body.decade-view{overflow:hidden}
 /* the year is stretched a little past every edge of its cell, so the cell clips it slightly on all four sides */
 .col h2 svg{position:absolute;left:-3%;top:-5%;width:106%;height:110%;fill:currentColor;overflow:visible}
 .col.rank h2{color:var(--rank)}
-.col h2 .cent{fill:var(--rank-dark)}
+/* the first two digits are a darker shade of the title colour (grey on white, dark yellow on yellow) */
+.col h2 .cent{fill:var(--text-dark)}
+.col.rank h2 .cent{fill:var(--rank-dark)}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
 .wall img.in{opacity:1}
 .tiles img,.ghost{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
