@@ -21,7 +21,16 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 /* view switcher */
 .views{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:20;display:flex;gap:2px;padding:3px;border-radius:999px;background:rgba(22,22,24,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 .views button{font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:none;border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
-.views button.on{color:var(--text);background:#2a2a2e}
+.views{align-items:center}
+/* the selected tab: yellow text on black, a little bigger. Each button is already as wide as its
+   bigger selected label (the hidden ::after), so switching tabs never nudges the others. */
+.views button{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;height:33px}
+.views button::after{content:attr(data-label);height:0;overflow:hidden;visibility:hidden;font-size:14px;font-weight:700}
+.views button.on{color:var(--rank);background:#000;font-size:14px;font-weight:700}
+/* iPod sits in the middle and is always bigger than the rest */
+.views button.hub{font-size:15px;font-weight:700;color:var(--text)}
+.views button.hub::after{font-size:17px}
+.views button.hub.on{color:var(--rank);font-size:17px}
 @media (max-width:520px){.views button{padding:8px 7px;font-size:11px}}
 /* the bar can be dragged to any edge; it snaps to the nearest one and stays there (wall.dock) */
 .views{touch-action:none;user-select:none;-webkit-user-select:none}
@@ -29,7 +38,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .views.dock-left,.views.dock-right{bottom:auto;top:50%;transform:translateY(-50%);flex-direction:column;border-radius:18px}
 .views.dock-left{left:14px}
 .views.dock-right{left:auto;right:14px}
-.views.dock-left button,.views.dock-right button{text-align:left}
+.views.dock-left,.views.dock-right{align-items:stretch}
 .views.dragging{transform:none;transition:none;cursor:grabbing;box-shadow:0 18px 40px rgba(0,0,0,.6)}
 .views.dragging button{cursor:grabbing}
 /* keep the edge under the bar clear, so nothing important hides behind it */
@@ -133,12 +142,12 @@ body.decade-view{overflow:hidden}
   <button data-act="remove">Remove From Queue</button>
 </div>
 <nav class="views hidden" id="views">
-  <button data-view="wall">Wall</button>
-  <button data-view="decades">Decades</button>
-  <button data-view="pantheon">Pantheon</button>
-  <button data-view="wax">Wax</button>
-  <button data-view="queue">Queue</button>
-  <button data-view="ipod">iPod</button>
+  <button data-view="queue" data-label="Queue">Queue</button>
+  <button data-view="decades" data-label="Decades">Decades</button>
+  <button data-view="ipod" data-label="iPod" class="hub">iPod</button>
+  <button data-view="wall" data-label="Wall">Wall</button>
+  <button data-view="wax" data-label="Wax">Wax</button>
+  <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
 </nav>
 
 <script src="ipod.js"></script>
