@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
 <style>
-:root{ --rank:#ffd400; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
+:root{ --rank:#ffd400; --rank-dark:#a88a00; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
@@ -31,6 +31,7 @@ body.decade-view{overflow:hidden}
 /* the year is stretched a little past every edge of its cell, so the cell clips it slightly on all four sides */
 .col h2 svg{position:absolute;left:-3%;top:-5%;width:106%;height:110%;fill:currentColor;overflow:visible}
 .col.rank h2{color:var(--rank)}
+.col h2 .cent{fill:var(--rank-dark)}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
 .wall img.in{opacity:1}
 .tiles img,.ghost{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
@@ -704,7 +705,7 @@ function titleSvg(text){
   const m = inkCtx.measureText(text);
   const box = [-m.actualBoundingBoxLeft, -m.actualBoundingBoxAscent,
     m.actualBoundingBoxLeft + m.actualBoundingBoxRight, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent];
-  return `<svg viewBox="${box.join(" ")}" preserveAspectRatio="none" aria-label="${text}s"><text x="0" y="0">${text}</text></svg>`;
+  return `<svg viewBox="${box.join(" ")}" preserveAspectRatio="none" aria-label="${text}s"><text x="0" y="0"><tspan class="cent">${text.slice(0, 2)}</tspan>${text.slice(2)}</text></svg>`;
 }
 function renderDecades(){
   const groups = decadeGroups();
@@ -755,9 +756,36 @@ dec.addEventListener("wheel", e => {
 dec.addEventListener("click", e => {
   const h = e.target.closest(".col h2");
   if (!h) return;
-  // switch this decade between release order and your ranking, and go back to the top
-  const d = h.parentElement.dataset.decade;
+  // switch this decade between release order and your ranking, go back to the top, and bring it to the middle
+  const col = h.parentElement, d = col.dataset.decade;
   showDecade(d, !isRanked(d));
+  glideTo(col.offsetLeft + col.offsetWidth / 2 - dec.clientWidth / 2);
+});
+// slide the decades sideways to x
+let glide = 0;
+function glideTo(x){
+  cancelAnimationFrame(glide);
+  const from = dec.scrollLeft, dist = x - from, t0 = performance.now(), ms = 450;
+  const step = now => {
+    const t = Math.min(1, (now - t0) / ms), k = 1 - Math.pow(1 - t, 3);
+    dec.scrollLeft = from + dist * k;
+    if (t < 1) glide = requestAnimationFrame(step); else { glide = 0; wrap(); }
+  };
+  glide = requestAnimationFrame(step);
+}
+// when Decades sits idle, drift slowly to the right; any touch of the mouse, keys or screen stops it
+const IDLE_MS = 8000, DRIFT = 18; // px per second
+let lastInput = performance.now(), driftAt = 0, driftX = 0;
+for (const ev of ["pointermove", "pointerdown", "wheel", "keydown", "touchstart"])
+  addEventListener(ev, () => { lastInput = performance.now(); driftAt = 0; }, { passive: true, capture: true });
+requestAnimationFrame(function drift(now){
+  requestAnimationFrame(drift);
+  if (view !== "decades" || !setW || glide || drag || !menu.classList.contains("hidden") || now - lastInput < IDLE_MS){ driftAt = 0; return; }
+  if (!driftAt || Math.abs(driftX - dec.scrollLeft) > 2) driftX = dec.scrollLeft; // start from wherever it is now
+  if (driftAt) driftX += DRIFT * Math.min(100, now - driftAt) / 1000;
+  driftAt = now;
+  dec.scrollLeft = driftX;
+  if (dec.scrollLeft >= 2 * setW){ wrap(); driftX = dec.scrollLeft; }
 });
 function showDecade(d, rank){
   LS.set("mode." + d, rank ? "rank" : "chrono");
