@@ -437,7 +437,7 @@ function setView(v){
   if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
-  if (v === "decades") renderDecades();
+  if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
@@ -448,6 +448,7 @@ let setW = 0;            // width of one full run of decade columns
 const colTop = {};       // remembered scroll position of each decade column
 const expected = new WeakMap(); // scroll positions we set ourselves (so copies don't echo back)
 let decTimer = 0;
+let centerNext = true;   // opening Decades starts with the 2020s in the middle of the screen
 // tidy up years saved by the old MusicBrainz lookup
 try{ for (const k of Object.keys(localStorage)) if (k.startsWith("wall.orig.")) localStorage.removeItem(k); }catch{}
 let loaded = false; // decades are laid out once everything has loaded, so nothing moves around
@@ -523,7 +524,15 @@ function renderDecades(){
   for (let i = 1; i < copies; i++) dec.appendChild(set());
   stretchTitles();
   for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
-  dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
+  if (centerNext){
+    // put the 2020s (or the latest decade, if there's nothing from the 2020s) in the middle, in the second copy
+    centerNext = false;
+    const ds = groups.map(([d]) => +d), i = ds.includes(2020) ? ds.indexOf(2020) : ds.indexOf(Math.max(...ds));
+    const c = dec.children[groups.length + i];
+    let x = c.offsetLeft + c.offsetWidth / 2 - dec.clientWidth / 2;
+    if (x < setW) x += setW;
+    dec.scrollLeft = x;
+  } else dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
 }
 function wrap(){
   if (!setW) return;
