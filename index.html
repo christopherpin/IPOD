@@ -242,6 +242,23 @@ function collector(){
     }
   } };
 }
+// Your library only ever grows: a fresh Spotify list goes first (newest listening on top), then every
+// album from earlier visits that Spotify no longer mentions, so nothing ever drops off the wall.
+function mergeLibrary(fresh, old){
+  const key = a => norm(cleanTitle(a.name || (a.title || "").split(" · ")[0])) + "|" + norm(a.artist || "");
+  const at = new Map(), out = [];
+  for (const a of fresh){ at.set(key(a), out.length); out.push(a); }
+  for (const a of Array.isArray(old) ? old : []){
+    if (!a || !a.id || !a.src) continue;
+    const k = key(a);
+    if (!at.has(k)){ at.set(k, out.length); out.push(a); continue; }
+    // the same album again: keep every Spotify id it has had, and whichever version is the original
+    const i = at.get(k), f = out[i];
+    const ids = [...new Set([...(f.ids || [f.id]), ...(a.ids || [a.id])])];
+    out[i] = better(a, f) ? { ...a, ids } : { ...f, ids };
+  }
+  return out;
+}
 function fillGrid(el, list){
   const frag = document.createDocumentFragment();
   for (const a of list){
@@ -1155,14 +1172,14 @@ $("#form").onsubmit = async e => {
     // show last visit's albums straight away; fetch a fresh list quietly for next time, so nothing moves now
     albums = cached; ready();
     const col = collector();
-    load(col).then(() => { if (col.list.length) LS.set(CACHE, col.list); })
+    load(col).then(() => { if (col.list.length) LS.set(CACHE, mergeLibrary(col.list, LS.get(CACHE))); })
       .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
     return;
   }
   try {
     $("#loading").classList.remove("hidden");
     const col = collector(); await load(col);
-    albums = col.list; LS.set(CACHE, albums); ready();
+    albums = mergeLibrary(col.list, LS.get(CACHE)); LS.set(CACHE, albums); ready();
   }
   catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); albums = []; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
