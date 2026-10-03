@@ -144,7 +144,7 @@ function add(list){
       if (better(version, same)){
         Object.assign(same, version);
         same.el.src = src; same.el.title = version.title;
-        if (settleYear(same) || view === "decades") scheduleDecades(1500);
+        settleYear(same);
       }
       continue;
     }
@@ -157,7 +157,7 @@ function add(list){
     albums.push(al);
   }
   $("#wall").appendChild(frag);
-  if (view === "decades"){ scheduleDecades(); originalYears(); }
+
 }
 const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
 
@@ -185,9 +185,8 @@ async function load(){
 }
 
 /* ---------- original release years ---------- */
-// Spotify dates a reissue by the reissue ("Remastered 2019"), so for decades we look for
-// when the music first came out: a year in the title ("On Guitar 1955-1962"), or the
-// first release date MusicBrainz has for the album. The earliest one wins.
+// Spotify dates a reissue by the reissue ("Remastered 2019"); a year in the title
+// ("On Guitar 1955-1962") wins when it's earlier.
 const REISSUE = /remaster|deluxe|edition|anniversary|expanded|reissue|version|mono|stereo|bonus|re-?mix|legacy|collector/i;
 function cleanTitle(t){
   return t.replace(/\s*[(\[]([^)\]]*)[)\]]/g, (m, inner) => REISSUE.test(inner) ? "" : m)
@@ -200,56 +199,12 @@ function titleYear(t){
   return ys.length ? Math.min(...ys) : null;
 }
 function settleYear(a){
-  const ys = [a.released, a.fromTitle, a.orig].filter(y => y > 1000);
+  const ys = [a.released, a.fromTitle].filter(y => y > 1000);
   const before = a.year;
   a.year = ys.length ? Math.min(...ys) : null;
   return a.year !== before;
 }
 const norm = s => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, "and").replace(/[^a-z0-9]+/g, " ").trim();
-async function musicbrainzYear(a){
-  const t = cleanTitle(a.name), q = s => '"' + s.replace(/["\\]/g, " ") + '"';
-  const r = await fetch("https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=10&query=" +
-    encodeURIComponent(`releasegroup:${q(t)} AND artist:${q(a.artist)}`));
-  if (r.status === 503 || r.status === 429) throw new Error("busy");
-  if (!r.ok) return 0;
-  const j = await r.json();
-  const ys = (j["release-groups"] || [])
-    .filter(g => norm(g.title || "") === norm(t) && (g["artist-credit"] || []).some(c => norm(c.name || c.artist?.name || "") === norm(a.artist)))
-    .map(g => parseInt((g["first-release-date"] || "").slice(0, 4), 10)).filter(y => y > 1000);
-  return ys.length ? Math.min(...ys) : 0;
-}
-const mbQueue = [];
-let mbBusy = false;
-function originalYears(){
-  if (new URLSearchParams(location.search).has("demo")) return;
-  for (const a of albums){
-    if (a.orig !== undefined) continue;
-    const known = LS.get("orig." + a.id);
-    a.orig = known;
-    if (known !== null){ if (settleYear(a)) scheduleDecades(1500); }
-    else mbQueue.push(a);
-  }
-  pumpYears();
-}
-async function pumpYears(){
-  if (mbBusy) return;
-  mbBusy = true;
-  while (mbQueue.length){
-    const a = mbQueue.shift();
-    try {
-      a.orig = await musicbrainzYear(a);
-      LS.set("orig." + a.id, a.orig);
-      if (settleYear(a)) scheduleDecades(1500);
-    } catch {
-      a.tries = (a.tries || 0) + 1;
-      if (a.tries < 3) mbQueue.push(a); // try again later this visit; otherwise next visit
-      await sleep(4000);
-    }
-    await sleep(1100); // MusicBrainz asks for at most one request a second
-  }
-  mbBusy = false;
-}
-
 /* ---------- views ---------- */
 let view = LS.get("view", "wall") === "decades" ? "decades" : "wall";
 function setView(v){
@@ -258,7 +213,7 @@ function setView(v){
   $("#decades").classList.toggle("hidden", v !== "decades");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
-  if (v === "decades"){ renderDecades(); originalYears(); }
+  if (v === "decades") renderDecades();
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
 
@@ -268,6 +223,9 @@ let setW = 0;            // width of one full run of decade columns
 const colTop = {};       // remembered scroll position of each decade column
 const expected = new WeakMap(); // scroll positions we set ourselves (so copies don't echo back)
 let decTimer = 0;
+// tidy up years saved by the old MusicBrainz lookup
+try{ for (const k of Object.keys(localStorage)) if (k.startsWith("wall.orig.")) localStorage.removeItem(k); }catch{}
+let loaded = false; // decades are laid out once everything has loaded, so nothing moves around
 function scheduleDecades(wait = 250){ clearTimeout(decTimer); decTimer = setTimeout(() => drag ? scheduleDecades(wait) : renderDecades(), wait); }
 
 function decadeGroups(){
@@ -329,6 +287,7 @@ function renderDecades(){
   const groups = decadeGroups();
   const offset = setW ? (dec.scrollLeft - setW) : 0;
   dec.innerHTML = "";
+  if (!loaded){ setW = 0; dec.innerHTML = '<p class="empty">Loading…</p>'; return; }
   if (!groups.length){ setW = 0; dec.innerHTML = albums.length ? '<p class="empty">No release years found.</p>' : ""; return; }
   const set = () => { const f = document.createDocumentFragment(); for (const [d, list] of groups) f.appendChild(column(d, list)); return f; };
   dec.appendChild(set());
@@ -516,12 +475,12 @@ $("#form").onsubmit = async e => {
     fake[1].name = "Jim Hall On Guitar 1955-1962"; fake[1].release_date = "2021";
     fake[2].name = "Abbey Road"; fake[2].release_date = "1969"; fake[2].artists = fake[0].artists = [{ name: "The Beatles" }];
     fake[3].name = "Abbey Road (Super Deluxe Edition)"; fake[3].artists = [{ name: "The Beatles" }];
-    startViews(); add(fake); return;
+    startViews(); add(fake); loaded = true; if (view === "decades") renderDecades(); return;
   }
   try { await handleRedirect(); } catch(e){ return showSetup(e.message); }
   if (!LS.get("token")) return showSetup();
   startViews();
-  try { await load(); }
+  try { await load(); loaded = true; if (view === "decades") renderDecades(); }
   catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; seen.clear(); byKey.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
 </script>
