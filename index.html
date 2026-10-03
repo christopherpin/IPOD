@@ -27,8 +27,9 @@ body.decade-view{overflow:hidden}
 .decades{--colw:clamp(150px,44vw,240px);position:fixed;inset:0;display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior:none}
 .decades::-webkit-scrollbar,.col::-webkit-scrollbar{display:none}
 .col{flex:0 0 var(--colw);height:100%;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior-y:contain}
-.col h2{position:sticky;top:0;z-index:2;margin:0;padding:16px 10px 12px;background:var(--bg);text-align:center;white-space:nowrap;overflow:hidden;font:700 26px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;cursor:pointer;user-select:none;transition:color .15s}
-.col h2 span{display:inline-block;transform-origin:center}
+.col h2{position:sticky;top:0;z-index:2;height:54px;margin:0;padding:0;background:var(--bg);overflow:hidden;font:700 26px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;cursor:pointer;user-select:none;transition:color .15s}
+/* the year is stretched a little past every edge of its cell, so the cell clips it slightly on all four sides */
+.col h2 svg{position:absolute;left:-3%;top:-5%;width:106%;height:110%;fill:currentColor;overflow:visible}
 .col.rank h2{color:var(--rank)}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
 .wall img.in{opacity:1}
@@ -437,7 +438,7 @@ function setView(v){
   if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
-  if (v === "decades") renderDecades();
+  if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b) setView(b.dataset.view); };
@@ -448,6 +449,7 @@ let setW = 0;            // width of one full run of decade columns
 const colTop = {};       // remembered scroll position of each decade column
 const expected = new WeakMap(); // scroll positions we set ourselves (so copies don't echo back)
 let decTimer = 0;
+let centerNext = true;   // opening Decades starts with the 2020s in the middle of the screen
 // tidy up years saved by the old MusicBrainz lookup
 try{ for (const k of Object.keys(localStorage)) if (k.startsWith("wall.orig.")) localStorage.removeItem(k); }catch{}
 let loaded = false; // decades are laid out once everything has loaded, so nothing moves around
@@ -487,26 +489,21 @@ function fillTiles(tiles, d, list){
 function column(d, list){
   const col = document.createElement("section");
   col.className = "col" + (isRanked(d) ? " rank" : ""); col.dataset.decade = d;
-  const h = document.createElement("h2"), label = document.createElement("span");
-  label.textContent = d + "s"; h.appendChild(label);
+  const h = document.createElement("h2");
+  h.innerHTML = titleSvg(String(d));
   const tiles = document.createElement("div"); tiles.className = "tiles";
   fillTiles(tiles, d, list);
   col.append(h, tiles);
   return col;
 }
-// stretch each decade title sideways so it spans its column
-function stretchTitles(){
-  const scale = {};
-  for (const span of dec.querySelectorAll(".col h2 span")){
-    const d = span.closest(".col").dataset.decade;
-    if (!(d in scale)){
-      span.style.transform = "";
-      const h = span.parentElement, cs = getComputedStyle(h);
-      const room = h.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-      scale[d] = Math.max(1, room / span.offsetWidth);
-    }
-    span.style.transform = `scaleX(${scale[d]})`;
-  }
+// the decade title is drawn as just the ink of its digits, stretched to fill the title cell
+const inkCtx = document.createElement("canvas").getContext("2d");
+function titleSvg(text){
+  inkCtx.font = '700 26px "Helvetica Neue",Helvetica,Arial,sans-serif';
+  const m = inkCtx.measureText(text);
+  const box = [-m.actualBoundingBoxLeft, -m.actualBoundingBoxAscent,
+    m.actualBoundingBoxLeft + m.actualBoundingBoxRight, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent];
+  return `<svg viewBox="${box.join(" ")}" preserveAspectRatio="none" aria-label="${text}s"><text x="0" y="0">${text}</text></svg>`;
 }
 function renderDecades(){
   const groups = decadeGroups();
@@ -521,9 +518,16 @@ function renderDecades(){
   // enough copies that we can always keep the view inside the second copy and still fill the screen
   const copies = 3 + Math.ceil(dec.clientWidth / setW);
   for (let i = 1; i < copies; i++) dec.appendChild(set());
-  stretchTitles();
   for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
-  dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
+  if (centerNext){
+    // put the 2020s (or the latest decade, if there's nothing from the 2020s) in the middle, in the second copy
+    centerNext = false;
+    const ds = groups.map(([d]) => +d), i = ds.includes(2020) ? ds.indexOf(2020) : ds.indexOf(Math.max(...ds));
+    const c = dec.children[groups.length + i];
+    let x = c.offsetLeft + c.offsetWidth / 2 - dec.clientWidth / 2;
+    if (x < setW) x += setW;
+    dec.scrollLeft = x;
+  } else dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
 }
 function wrap(){
   if (!setW) return;
@@ -540,6 +544,13 @@ dec.addEventListener("scroll", e => {
   for (const o of dec.querySelectorAll(`.col[data-decade="${c.dataset.decade}"]`))
     if (o !== c && Math.abs(o.scrollTop - c.scrollTop) >= 1){ o.scrollTop = c.scrollTop; expected.set(o, o.scrollTop); }
 }, true);
+// with the mouse over the decade titles, the wheel scrolls the decades sideways
+dec.addEventListener("wheel", e => {
+  if (!e.target.closest(".col h2") || e.ctrlKey) return;
+  e.preventDefault();
+  const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  dec.scrollLeft += d * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? dec.clientWidth : 1);
+}, { passive: false });
 dec.addEventListener("click", e => {
   const h = e.target.closest(".col h2");
   if (!h) return;
