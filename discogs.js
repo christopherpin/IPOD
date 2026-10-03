@@ -33,8 +33,8 @@
 "use strict";
 
 // Fill these in once the Discogs app exists (see discogs-test.html). Safe to publish: search-only.
-const KEY = "";
-const SECRET = "";
+const KEY = "RHSqiCtFLCKBYTeUotje";
+const SECRET = "ERZrvUHMFzVXbKQLUQMQylUFJEkzEcuG";
 
 const API = "https://api.discogs.com";
 const PREFIX = "discogs.v1.";
