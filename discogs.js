@@ -8,6 +8,7 @@
  *   Discogs.ready()                   -> true once a key and secret are set
  *   Discogs.setCredentials(key, secret) -> keep a key/secret in this browser only (used by discogs-test.html)
  *   Discogs.clear()                   -> forget every cached lookup
+ *   Discogs.lastError()               -> why the last lookup failed (bad key, network), or null
  *
  * info = {
  *   id, kind,                 // Discogs id; kind "master" (all versions of an album) or "release" (one pressing)
@@ -43,13 +44,17 @@ const HIT_TTL = 90 * 864e5, MISS_TTL = 14 * 864e5;
 const GAP = 1100;   // ms between requests
 
 /* ---------- credentials ---------- */
+let memo = null;   // fallback when this browser won't let us save to localStorage
+let lastError = null;
 function creds(){
   if (KEY && SECRET) return { key: KEY, secret: SECRET };
+  if (memo) return memo;
   try{ const c = JSON.parse(localStorage.getItem(CRED) || "null"); if (c && c.key && c.secret) return c; }catch{}
   return null;
 }
 const ready = () => !!creds();
 function setCredentials(key, secret){
+  memo = key && secret ? { key: String(key).trim(), secret: String(secret).trim() } : null;
   try{
     if (key && secret) localStorage.setItem(CRED, JSON.stringify({ key: String(key).trim(), secret: String(secret).trim() }));
     else localStorage.removeItem(CRED);
@@ -85,11 +90,12 @@ function api(path, params){
     for (let i = 0; i < 4; i++){
       await wait(Math.max(0, last + GAP - Date.now()));
       last = Date.now();
-      r = await fetch(API + path + "?" + qs);
+      try{ r = await fetch(API + path + "?" + qs); }
+      catch{ throw new Error("couldn't reach Discogs (the browser blocked the request or the connection dropped)"); }
       if (r.status !== 429 && r.status < 500) break;
       await wait(r.status === 429 ? 15000 * (i + 1) : 1000 * 2 ** i);   // Discogs' limit is a 60-second window
     }
-    if (!r.ok) throw new Error("Discogs error " + r.status);
+    if (!r.ok) throw new Error(r.status === 401 ? "Discogs didn't accept the key and secret" : "Discogs error " + r.status);
     return r.json();
   });
   chain = job.catch(() => {});
@@ -175,7 +181,7 @@ function lookup(album){
   if (!inflight.has(k)){
     inflight.set(k, find(album)
       .then(v => { store.set(k, { t: Date.now(), v }); return v; })
-      .catch(() => null)                    // network trouble or bad key: don't cache, try again next visit
+      .catch(e => { lastError = e.message || String(e); return null; })   // network trouble or bad key: don't cache, try again next visit
       .finally(() => inflight.delete(k)));
   }
   return inflight.get(k);
@@ -195,7 +201,7 @@ async function master(id){
   return v;
 }
 
-const Discogs = { lookup, lookupAll, cached, master, ready, setCredentials, clear,
+const Discogs = { lookup, lookupAll, cached, master, ready, setCredentials, clear, lastError: () => lastError,
   _test: { cleanTitle, norm, sameArtist, discogsName, splitTitle, matches, toInfo } };
 if (typeof window !== "undefined") window.Discogs = Discogs;
 if (typeof module !== "undefined") module.exports = Discogs;

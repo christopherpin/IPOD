@@ -25,7 +25,7 @@ button{background:#1ed760;color:#000;border:0;cursor:pointer}
 </form>
 <div id="out"></div>
 </main>
-<script src="discogs.js"></script>
+<script src="discogs.js?v=2"></script>
 <script>
 const albums = [
   ["OK Computer", "Radiohead"], ["Blue", "Joni Mitchell"], ["Abbey Road (Remastered 2019)", "The Beatles"],
@@ -36,6 +36,7 @@ const out = document.getElementById("out"), form = document.getElementById("f");
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 form.onsubmit = e => {
   e.preventDefault();
+  if (!document.getElementById("k").value.trim() || !document.getElementById("s").value.trim()){ out.innerHTML = `<p class="m">Paste both the key and the secret first.</p>`; return; }
   Discogs.setCredentials(document.getElementById("k").value, document.getElementById("s").value);
   run();
 };
@@ -49,7 +50,7 @@ function run(){
       ? `<img src="${esc(d.thumb)}" alt=""><div><b>${esc(a.name)}</b> <span class="m">· ${esc(a.artists[0].name)}</span><br>
          <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.artist)} – ${esc(d.title)}</a> <span class="m">· ${esc(d.year)} · ${esc(d.kind)}</span><br>
          Genres: ${esc(d.genres.join(", "))}<br>Styles: ${esc(d.styles.join(", "))}<br>Labels: ${esc(d.labels.slice(0, 4).join(", "))}</div>`
-      : `<div><b>${esc(a.name)}</b> <span class="m">· no Discogs match (or the key didn't work)</span></div>`;
+      : `<div><b>${esc(a.name)}</b> <span class="m">· ${Discogs.lastError() ? "lookup failed: " + esc(Discogs.lastError()) : "no Discogs match"}</span></div>`;
     out.appendChild(row);
   });
 }
