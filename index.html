@@ -9,7 +9,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;padding:4px}
-.wall img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile)}
+.wall img{opacity:0;transition:opacity .4s;display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile)}
 .setup{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
 .setup form{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px}
 .setup input,.setup button{font:inherit;color:inherit;border-radius:999px;padding:10px 16px;border:1px solid #2a2a2e;background:var(--tile)}
@@ -31,6 +31,7 @@ body.decade-view{overflow:hidden}
 .col h2 span{display:inline-block;transform-origin:center}
 .col.rank h2{color:var(--rank)}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
+.wall img.in{opacity:1}
 .tiles img,.ghost{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
 .col.rank .tiles img{cursor:grab}
 .tiles img.placeholder{opacity:.15}
@@ -50,6 +51,7 @@ body.decade-view{overflow:hidden}
     <p id="help">Get a Client ID: open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener" style="color:var(--accent)">developer.spotify.com/dashboard</a>, create an app, tick Web API, and add the Redirect URI <b id="redir"></b>. Then copy the app's Client ID here.</p>
   </form>
 </div>
+<p class="empty hidden" id="loading">Loading…</p>
 <main class="wall" id="wall"></main>
 <main class="decades hidden" id="decades"></main>
 <div class="menu hidden" id="menu"><button id="toTop">Send To Top 10</button></div>
@@ -126,8 +128,8 @@ const albumKey = a => norm(cleanTitle(a.name || "")) + "|" + norm((a.artists || 
 const isReissue = name => cleanTitle(name) !== name.trim();
 // the original wins over a reissue; among originals (or among reissues) the earliest wins
 const better = (x, y) => isReissue(x.name) !== isReissue(y.name) ? !isReissue(x.name) : (x.released || 9999) < (y.released || 9999);
+// collects albums only; nothing is drawn until everything has loaded and duplicates are settled
 function add(list){
-  const frag = document.createDocumentFragment();
   for (const a of list){
     if (!a || !a.id || seen.has(a.id)) continue;
     seen.add(a.id);
@@ -143,21 +145,32 @@ function add(list){
       same.ids.push(a.id);
       if (better(version, same)){
         Object.assign(same, version);
-        same.el.src = src; same.el.title = version.title;
         settleYear(same);
       }
       continue;
     }
-    const img = document.createElement("img");
-    img.src = src; img.loading = "lazy"; img.alt = ""; img.title = version.title;
-    frag.appendChild(img);
-    const al = { id: a.id, ids: [a.id], el: img, artist: (a.artists || [])[0]?.name || "", ...version };
+    const al = { id: a.id, ids: [a.id], artist: (a.artists || [])[0]?.name || "", ...version };
     settleYear(al);
     byKey.set(key, al);
     albums.push(al);
   }
-  $("#wall").appendChild(frag);
-
+}
+function renderWall(){
+  const frag = document.createDocumentFragment();
+  for (const a of albums){
+    const img = document.createElement("img");
+    img.src = a.src; img.loading = "lazy"; img.alt = ""; img.title = a.title;
+    img.onload = () => img.classList.add("in");
+    frag.appendChild(img);
+  }
+  $("#wall").replaceChildren(frag);
+}
+// called once, after the last album has arrived
+function ready(){
+  loaded = true;
+  $("#loading").classList.add("hidden");
+  renderWall();
+  if (view === "decades") renderDecades();
 }
 const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
 
@@ -287,7 +300,7 @@ function renderDecades(){
   const groups = decadeGroups();
   const offset = setW ? (dec.scrollLeft - setW) : 0;
   dec.innerHTML = "";
-  if (!loaded){ setW = 0; dec.innerHTML = '<p class="empty">Loading…</p>'; return; }
+  if (!loaded){ setW = 0; dec.innerHTML = ""; return; }
   if (!groups.length){ setW = 0; dec.innerHTML = albums.length ? '<p class="empty">No release years found.</p>' : ""; return; }
   const set = () => { const f = document.createDocumentFragment(); for (const [d, list] of groups) f.appendChild(column(d, list)); return f; };
   dec.appendChild(set());
@@ -475,13 +488,13 @@ $("#form").onsubmit = async e => {
     fake[1].name = "Jim Hall On Guitar 1955-1962"; fake[1].release_date = "2021";
     fake[2].name = "Abbey Road"; fake[2].release_date = "1969"; fake[2].artists = fake[0].artists = [{ name: "The Beatles" }];
     fake[3].name = "Abbey Road (Super Deluxe Edition)"; fake[3].artists = [{ name: "The Beatles" }];
-    startViews(); add(fake); loaded = true; if (view === "decades") renderDecades(); return;
+    startViews(); add(fake); ready(); return;
   }
   try { await handleRedirect(); } catch(e){ return showSetup(e.message); }
   if (!LS.get("token")) return showSetup();
   startViews();
-  try { await load(); loaded = true; if (view === "decades") renderDecades(); }
-  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; seen.clear(); byKey.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
+  try { $("#loading").classList.remove("hidden"); await load(); ready(); }
+  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); seen.clear(); byKey.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
 </script>
 </body>
