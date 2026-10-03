@@ -120,6 +120,12 @@ async function api(path, tries=0){
 /* ---------- the wall ---------- */
 const seen = new Set();
 const albums = []; // every album on the wall, in wall order
+// remasters, deluxe and anniversary editions of the same album share one key, so each album shows once
+const byKey = new Map();
+const albumKey = a => norm(cleanTitle(a.name || "")) + "|" + norm((a.artists || [])[0]?.name || "");
+const isReissue = name => cleanTitle(name) !== name.trim();
+// the original wins over a reissue; among originals (or among reissues) the earliest wins
+const better = (x, y) => isReissue(x.name) !== isReissue(y.name) ? !isReissue(x.name) : (x.released || 9999) < (y.released || 9999);
 function add(list){
   const frag = document.createDocumentFragment();
   for (const a of list){
@@ -128,14 +134,26 @@ function add(list){
     const imgs = a.images || [];
     const src = (imgs.find(i => i.width && i.width <= 320 && i.width >= 250) || imgs[0] || {}).url;
     if (!src) continue;
-    const img = document.createElement("img");
-    img.src = src; img.loading = "lazy"; img.alt = "";
-    img.title = a.name + " · " + (a.artists || []).map(x => x.name).join(", ");
-    frag.appendChild(img);
     const year = parseInt((a.release_date || "").slice(0, 4), 10);
-    const al = { id: a.id, src, title: img.title, name: a.name || "", artist: (a.artists || [])[0]?.name || "",
+    const version = { src, title: a.name + " · " + (a.artists || []).map(x => x.name).join(", "), name: a.name || "",
       released: year > 1000 ? year : null, date: a.release_date || "", fromTitle: titleYear(a.name || "") };
+    const key = albumKey(a), same = byKey.get(key);
+    if (same){
+      // another version of an album we already have: keep whichever is the original
+      same.ids.push(a.id);
+      if (better(version, same)){
+        Object.assign(same, version);
+        same.el.src = src; same.el.title = version.title;
+        if (settleYear(same) || view === "decades") scheduleDecades(1500);
+      }
+      continue;
+    }
+    const img = document.createElement("img");
+    img.src = src; img.loading = "lazy"; img.alt = ""; img.title = version.title;
+    frag.appendChild(img);
+    const al = { id: a.id, ids: [a.id], el: img, artist: (a.artists || [])[0]?.name || "", ...version };
     settleYear(al);
+    byKey.set(key, al);
     albums.push(al);
   }
   $("#wall").appendChild(frag);
@@ -271,7 +289,9 @@ function chronological(list){
 // albums you've dragged keep your order; albums new since then sit at the top
 function ranked(d, list){
   const pos = new Map(LS.get("order." + d, []).map((id, i) => [id, i]));
-  return [...list.filter(a => !pos.has(a.id)), ...list.filter(a => pos.has(a.id)).sort((x, y) => pos.get(x.id) - pos.get(y.id))];
+  // an album is known by any of its versions' ids, so a ranking survives a remaster being swapped for the original
+  const at = a => Math.min(...a.ids.map(id => pos.has(id) ? pos.get(id) : Infinity));
+  return [...list.filter(a => at(a) === Infinity), ...list.filter(a => at(a) < Infinity).sort((x, y) => at(x) - at(y))];
 }
 function fillTiles(tiles, d, list){
   tiles.textContent = "";
@@ -494,13 +514,15 @@ $("#form").onsubmit = async e => {
     });
     fake[0].name = "Abbey Road (Remastered 2019)"; fake[0].release_date = "2019-09-27";
     fake[1].name = "Jim Hall On Guitar 1955-1962"; fake[1].release_date = "2021";
+    fake[2].name = "Abbey Road"; fake[2].release_date = "1969"; fake[2].artists = fake[0].artists = [{ name: "The Beatles" }];
+    fake[3].name = "Abbey Road (Super Deluxe Edition)"; fake[3].artists = [{ name: "The Beatles" }];
     startViews(); add(fake); return;
   }
   try { await handleRedirect(); } catch(e){ return showSetup(e.message); }
   if (!LS.get("token")) return showSetup();
   startViews();
   try { await load(); }
-  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; seen.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
+  catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; seen.clear(); byKey.clear(); albums.length = 0; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
 </script>
 </body>
