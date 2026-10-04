@@ -195,7 +195,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-2";
+const BUILD = "2026-10-04 wall-recent-3";
 const DEBUG = new URLSearchParams(location.search).has("debug");
 function dbg(...msg){
   if (!DEBUG) return;
@@ -258,10 +258,17 @@ async function accessToken(){
 async function api(path, tries=0){
   const tok = await accessToken();
   const r = await fetch(path.startsWith("http") ? path : "https://api.spotify.com/v1" + path, { headers:{ Authorization:"Bearer "+tok } });
-  if (r.status === 429 && tries < 4){ await sleep((+r.headers.get("Retry-After") || 2) * 1000); return api(path, tries+1); }
+  if (r.status === 429){
+    // Spotify says slow down: try once more after a short pause, then give up on this request
+    // (browsers usually can't read Spotify's Retry-After, so the pause is a guess)
+    const wait = +r.headers.get("Retry-After") || 2;
+    dbg("Spotify asked to slow down (wait " + wait + "s):", path.split("?")[0]);
+    if (tries < 1 && wait <= 5){ await sleep(wait * 1000); return api(path, tries+1); }
+    const e = new Error("Spotify is busy, try again in a moment"); e.status = 429; throw e;
+  }
   if (r.status === 401 && tries < 1){ const t = LS.get("token"); if (t){ t.exp = 0; LS.set("token", t); } return api(path, tries+1); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok){ const e = new Error((j.error && j.error.message) || ("Spotify error " + r.status)); e.status = r.status; throw e; }
+  if (!r.ok){ const e = new Error((j.error && j.error.message) || ("Spotify error " + r.status)); e.status = r.status; dbg("Spotify error", r.status + ":", path.split("?")[0], e.message); throw e; }
   return j;
 }
 
@@ -467,17 +474,30 @@ async function pool(items, n, fn){
   return out;
 }
 const addRecent = (col, recent) => col.add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
-async function load(col){
-  // ask Spotify for everything at once rather than one page after another
-  const recentP = safe("/me/player/recently-played?limit=50");
+// known: album ids already saved on this device. Then only the newest saved albums are fetched, page by page,
+// until one you already have turns up (older ones are kept anyway), so a visit asks Spotify for a handful
+// of pages instead of every page of your library, and Spotify doesn't start turning requests away.
+async function load(col, known = null, recent = null){
+  const recentP = recent ? Promise.resolve(recent) : safe("/me/player/recently-played?limit=50");
   const topsP = Promise.all(["short_term", "medium_term", "long_term"].flatMap(r => [
     safe(`/me/top/tracks?time_range=${r}&limit=50`),
     safe(`/me/top/tracks?time_range=${r}&limit=50&offset=49`)
   ]));
   const first = await safe("/me/albums?limit=50");
-  const offsets = [];
-  for (let o = 50; o < (first?.total || 0); o += 50) offsets.push(o);
-  const restP = pool(offsets, 6, o => safe(`/me/albums?limit=50&offset=${o}`));
+  const seen = p => (p?.items || []).some(i => known.has(i.album?.id));
+  let restP;
+  if (known){
+    restP = (async () => {
+      const pages = [];
+      for (let o = 50, last = first; last && !seen(last) && o < (first?.total || 0); o += 50) pages.push(last = await safe(`/me/albums?limit=50&offset=${o}`));
+      return pages;
+    })();
+  } else {
+    // first visit: ask for everything at once rather than one page after another
+    const offsets = [];
+    for (let o = 50; o < (first?.total || 0); o += 50) offsets.push(o);
+    restP = pool(offsets, 6, o => safe(`/me/albums?limit=50&offset=${o}`));
+  }
 
   // then add them in wall order: 1. last 50 plays, newest first
   addRecent(col, await recentP);
@@ -1407,11 +1427,13 @@ $("#form").onsubmit = async e => {
     // so the wall opens on what you've been listening to. Nothing is drawn until this is settled.
     dbg("build", BUILD, "· saved albums:", cached.length, "· top left was:", cached[0]?.title);
     const wait = setTimeout(() => $("#loading").classList.remove("hidden"), 600);
-    let signedOut = false;
+    let signedOut = false, busy = false;
+    const t0 = performance.now();
     const recent = await Promise.race([
-      safe("/me/player/recently-played?limit=50").catch(e => { signedOut = e.status === 401; dbg("recent plays failed:", e.status || "", e.message); return null; }),
+      api("/me/player/recently-played?limit=50").catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; }),
       sleep(8000).then(() => { dbg("recent plays took too long, showing the saved wall"); return null; })]);
     clearTimeout(wait);
+    if (recent) dbg("recent plays answered in", Math.round(performance.now() - t0), "ms");
     if (signedOut){
       // Spotify no longer accepts this sign-in: ask to connect again rather than quietly showing an old wall
       LS.del("token"); $("#loading").classList.add("hidden"); $("#views").classList.add("hidden");
@@ -1427,8 +1449,10 @@ $("#form").onsubmit = async e => {
     dbg("top left now:", albums[0]?.title);
     ready();
     // then fetch the full list (top tracks, saved albums) quietly for next time, so nothing moves now
+    // if Spotify is already turning requests away, leave it alone this visit
+    if (busy){ dbg("skipping the full refresh this visit so Spotify can cool down"); return; }
     const col = collector();
-    load(col).then(() => { if (col.list.length){ const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("full refresh saved for next time:", all.length, "albums"); } })
+    load(col, new Set(cached.flatMap(a => a.ids || [a.id])), recent).then(() => { if (col.list.length){ const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("full refresh saved for next time:", all.length, "albums"); } })
       .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
     return;
   }
