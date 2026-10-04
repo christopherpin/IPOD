@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
-<link rel="stylesheet" href="ipod.css">
-<link rel="stylesheet" href="discover.css">
-<link rel="stylesheet" href="lineage.css">
+<link rel="stylesheet" href="ipod.css?v=2026-10-04b">
+<link rel="stylesheet" href="discover.css?v=2026-10-04b">
+<link rel="stylesheet" href="lineage.css?v=2026-10-04b">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -217,10 +217,10 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
 </nav>
 
-<script src="ipod.js"></script>
-<script src="wiki.js"></script>
-<script src="discover.js"></script>
-<script src="lineage.js"></script>
+<script src="ipod.js?v=2026-10-04b"></script>
+<script src="wiki.js?v=2026-10-04b"></script>
+<script src="discover.js?v=2026-10-04b"></script>
+<script src="lineage.js?v=2026-10-04b"></script>
 <script>
 "use strict";
 const LS = {
@@ -238,7 +238,9 @@ const newestPage = fetch(location.href, { cache: "reload" }).then(r => r.ok ? r.
 async function outdated(){
   const html = await Promise.race([newestPage, sleep(2500).then(() => null)]);
   if (!html) return false;
-  const mine = [...document.querySelectorAll("script:not([src]), style")].map(e => e.textContent.trim());
+  // the page's own code, and which version of each file it loads (bumping ?v= on a file counts as new)
+  const mine = [...document.querySelectorAll("script:not([src]), style")].map(e => e.textContent.trim())
+    .concat([...document.querySelectorAll("script[src], link[rel=stylesheet]")].map(e => e.getAttribute("src") || e.getAttribute("href")));
   if (mine.every(t => html.includes(t))){ try{ sessionStorage.removeItem("wall.reloaded"); }catch{} return false; }
   try{ if (sessionStorage.getItem("wall.reloaded")) return false; sessionStorage.setItem("wall.reloaded", "1"); }catch{ return false; }
   dbg("a newer version of the page is out, reloading");
@@ -1057,7 +1059,7 @@ async function discover(a){
   }
   dzState = { seed, loading: true };
   setView("discover"); scrollTo(0, 0);
-  const res = await findRecs(seed).catch(() => ({ seed, recs: [] }));
+  const res = await findRecs(seed).catch(e => (dbg("discover failed:", e?.message || e), { seed, recs: [] }));
   if (run !== dzRun) return;
   dzState = res;
   if (res.recs.length){ LS.set("discover", res); savedPut("discover", res); }
@@ -1090,7 +1092,7 @@ async function familyTree(a){
   }
   lgState = { seed, loading: true };
   setView("lineage");
-  const res = await Lineage.find(seed).catch(() => ({ seed, before: [[], []], after: [[], []], lanes: [] }));
+  const res = await Lineage.find(seed).catch(e => (dbg("family tree failed:", e?.message || e), { seed, before: [[], []], after: [[], []], lanes: [] }));
   if (run !== lgRun) return;
   lgState = res;
   if (hasTree(res)){ LS.set("lineage", res); savedPut("lineage", res); }

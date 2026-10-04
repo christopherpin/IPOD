@@ -123,7 +123,7 @@ function laneOf(nodes){
 async function find(seed){
   const A = seed.artist, year = seed.year || null;
   const mbid = await cap(S.mbArtist(A), 9000, null);
-  if (!mbid) return { seed, before: [[], []], after: [[], []], lanes: [], at: Date.now() };
+  if (!mbid){ S.log(`Family tree ${seed.name}: MusicBrainz didn't find ${A}`); return { seed, before: [[], []], after: [[], []], lanes: [], at: Date.now() }; }
 
   // 1. the artist's own influences, and the critic-cited sentences about influence in the album's and artist's articles
   const seedWiki = window.Wiki ? await cap(Wiki.lookup({ name: seed.name, artists: [{ name: A }] }), 9000, null) : null;
@@ -134,6 +134,7 @@ SELECT ?article WHERE { ?a wdt:P434 "${esc(mbid)}" . ?article schema:about ?a ; 
   const critSents = texts.flat().filter(s => s.outlets.length && INFLUENCE.test(s.text) && s.links.length);
   const linked = await cap(artistsByTitle([...new Set(critSents.flatMap(s => s.links))]), 12000, []);
 
+  S.log(`Family tree ${seed.name}: ${g1.length} sourced influences on Wikidata, ${critSents.length} critic sentences, ${linked.length} artists named in them`);
   // 2. first generation either side
   const nodes = new Map(); // dir|mbid -> node
   const add = (dir, gen, x, why, critic) => {
@@ -187,6 +188,7 @@ SELECT ?article WHERE { ?a wdt:P434 "${esc(mbid)}" . ?article schema:about ?a ; 
     placed.push({ ...n, name: al.name, year: al.year, rg: al.rg, links: al.links,
       src: al.rg ? `https://coverartarchive.org/release-group/${al.rg}/front-250` : "" });
   }
+  S.log(`Family tree ${seed.name}: albums for ${albums.size} artists, ${placed.length} placed`);
   // the best-documented first: critic-backed, then the most written-about albums
   const rank = (a, b) => (b.critic ? 1 : 0) - (a.critic ? 1 : 0) || b.links - a.links;
   const pickGen = (dir, gen, n) => placed.filter(x => x.dir === dir && x.gen === gen).sort(rank).slice(0, n);

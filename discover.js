@@ -20,6 +20,8 @@
 (function(){
 "use strict";
 
+// a line in the ?debug panel, when the page is opened with ?debug
+const log = (...m) => { try{ window.dbg && window.dbg(...m); }catch{} };
 const norm = s => (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
   .replace(/&/g, " and ").replace(/^the\s+/, "").replace(/[^a-z0-9]+/g, " ").trim();
 const keyOf = (name, artist) => norm(name) + "|" + norm(artist);
@@ -265,6 +267,8 @@ async function find(seed, opts = {}){
     seedWiki?.wikidata ? cap(producerLinks(seedWiki.wikidata), 12000, []) : [],
     seedWiki ? cap(criticSentences(seedWiki.title), 9000, []) : []
   ]);
+  log(`Discover ${T}: Deezer ${dzA ? "found the artist" : "no artist"}, ${related.length} similar; ListenBrainz ${lb.length}; ` +
+    `MusicBrainz ${mbid ? "found" : "no artist"}; Wikidata ${links.length} links, ${prods.length} producer albums; Wikipedia ${seedWiki ? seedWiki.title : "no article"}`);
   const artistArticle = links.find(l => l.article)?.article;
   const seedSents = seedText.concat(artistArticle ? await cap(criticSentences(decodeURIComponent(artistArticle.split("/wiki/")[1] || "").replace(/_/g, " ")), 9000, []) : []);
 
@@ -340,6 +344,7 @@ async function find(seed, opts = {}){
   }
   const group = k => out.filter(r => r.kind === k).sort((a, b) => a.strength - b.strength).slice(0, k === "link" ? 6 : 8);
   const recs = [...group("sound"), ...group("fans"), ...group("link")].map(({ strength, ...r }) => r);
+  log(`Discover ${T}: ${uniq.length} albums found, ${recs.length} shown`);
   return { seed: { ...seed, big: dzAlb?.cover_xl || "", genres: seedGenres }, recs, at: Date.now() };
 }
 
@@ -405,7 +410,7 @@ function render(el, state, { onPick } = {}){
 }
 
 // shared with lineage.js, which asks the same places
-const Discover = { find, render, _src: { mbArtist, sparql, articleText, sentences, criticSentences, mentions, norm, cap, trim, list },
+const Discover = { find, render, _src: { log, mbArtist, sparql, articleText, sentences, criticSentences, mentions, norm, cap, trim, list },
   _test: { sentences, mentions, criticLine, outletOf, accolade, norm } };
 if (typeof window !== "undefined") window.Discover = Discover;
 })();
