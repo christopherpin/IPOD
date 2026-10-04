@@ -1532,7 +1532,7 @@ $("#form").onsubmit = async e => {
     // Before drawing, ask Spotify for just the latest plays (one quick request) and put those albums first,
     // so the wall opens on what you've been listening to. Nothing is drawn until this is settled.
     dbg("build", BUILD, "· saved albums:", cached.length, "· top left was:", cached[0]?.title);
-    const wait = setTimeout(() => $("#loading").classList.remove("hidden"), 600);
+    const wait = setTimeout(() => { if (!loaded) $("#loading").classList.remove("hidden"); }, 600);
     let signedOut = false, busy = false;
     const t0 = performance.now();
     // After Spotify says "slow down", leave it alone for a while (longer each time it repeats), so
@@ -1540,6 +1540,7 @@ $("#form").onsubmit = async e => {
     const cool = LS.get("cooldown", { until: 0, mins: 0 });
     if (Date.now() < cool.until){
       dbg("giving Spotify a rest until", new Date(cool.until).toLocaleTimeString(), "· showing the saved wall");
+      clearTimeout(wait);
       if (await outdated()) return;
       albums = cached; ready(); return;
     }
