@@ -75,6 +75,11 @@ body.decade-view{overflow:hidden}
 /* the first two digits are a darker shade of the title colour (grey on white, dark yellow on yellow) */
 .col h2 .cent{fill:var(--text-dark)}
 .col.rank h2 .cent{fill:var(--rank-dark)}
+/* an expanded decade: one column per year, with smaller titles that sit inside their cell */
+.col.yr h2 svg{left:6%;top:24%;width:88%;height:52%}
+/* while you're among an expanded decade's years, the decades either side sink into shadow */
+.col > *{transition:opacity .35s}
+.decades.shade .col:not(.yr) > *{opacity:.35}
 .tiles{display:flex;flex-direction:column;gap:4px;padding-bottom:64px}
 .wall img.in{opacity:1}
 .tiles img,.ghost{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--tile);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
@@ -181,6 +186,10 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="queue">Add To Queue</button>
   <button data-act="ipodout">Remove From iPod</button>
   <button data-act="ipodin">Add To iPod</button>
+</div>
+<div class="menu hidden" id="dmenu">
+  <button data-act="expand">Expand Decade</button>
+  <button data-act="collapse">Collapse Decade</button>
 </div>
 <div class="menu hidden" id="qmenu">
   <button data-act="spotify">Queue On Spotify</button>
@@ -1163,6 +1172,18 @@ function decadeGroups(){
   }
   return [...g.keys()].sort((x, y) => x - y).map(d => [d, g.get(d)]);
 }
+// the columns to show: one per decade, except an expanded decade, which gets one per year
+let expanded = null; // the decade spread out into years, if any
+function decadeColumns(){
+  const out = [];
+  for (const [d, list] of decadeGroups()){
+    if (d !== expanded){ out.push({ key: String(d), label: String(d), list }); continue; }
+    const last = Math.max(new Date().getFullYear(), ...list.map(a => a.year));
+    for (let y = d; y < d + 10 && y <= last; y++)
+      out.push({ key: "y" + y, label: String(y), list: list.filter(a => a.year === y), decade: d });
+  }
+  return out;
+}
 // each decade is either in release order (white) or your own ranking (yellow, draggable)
 const isRanked = d => LS.get("mode." + d) === "rank";
 // release order, newest first (same-day releases go A to Z)
@@ -1185,13 +1206,15 @@ function fillTiles(tiles, d, list){
     tiles.appendChild(img);
   }
 }
-function column(d, list){
+function column({ key, label, list, decade }){
   const col = document.createElement("section");
-  col.className = "col" + (isRanked(d) ? " rank" : ""); col.dataset.decade = d;
+  // a year column is always in release order, so it is never yellow or draggable
+  col.className = "col" + (decade ? " yr" : isRanked(key) ? " rank" : ""); col.dataset.decade = key;
+  if (decade) col.dataset.of = decade;
   const h = document.createElement("h2");
-  h.innerHTML = titleSvg(String(d));
+  h.innerHTML = titleSvg(label);
   const tiles = document.createElement("div"); tiles.className = "tiles";
-  fillTiles(tiles, d, list);
+  fillTiles(tiles, key, list);
   col.append(h, tiles);
   return col;
 }
@@ -1204,13 +1227,14 @@ function titleSvg(text){
     m.actualBoundingBoxLeft + m.actualBoundingBoxRight, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent];
   return `<svg viewBox="${box.join(" ")}" preserveAspectRatio="none" aria-label="${text}s"><text x="0" y="0"><tspan class="cent">${text.slice(0, 2)}</tspan>${text.slice(2)}</text></svg>`;
 }
-function renderDecades(){
-  const groups = decadeGroups();
+// anchor: keep the column with this key at screen position x (used when a decade opens or closes)
+function renderDecades(anchor){
+  const groups = decadeColumns();
   const offset = setW ? (dec.scrollLeft - setW) : 0;
   dec.innerHTML = "";
   if (!loaded){ setW = 0; dec.innerHTML = ""; return; }
   if (!groups.length){ setW = 0; dec.innerHTML = albums.length ? '<p class="empty">No release years found.</p>' : ""; return; }
-  const set = () => { const f = document.createDocumentFragment(); for (const [d, list] of groups) f.appendChild(column(d, list)); return f; };
+  const set = () => { const f = document.createDocumentFragment(); for (const g of groups) f.appendChild(column(g)); return f; };
   dec.appendChild(set());
   const first = dec.firstElementChild;
   setW = groups.length * (first.offsetWidth + parseFloat(getComputedStyle(dec).columnGap || 4));
@@ -1218,24 +1242,30 @@ function renderDecades(){
   const copies = 3 + Math.ceil(dec.clientWidth / setW);
   for (let i = 1; i < copies; i++) dec.appendChild(set());
   for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
-  if (centerNext){
+  if (anchor){
+    const i = groups.findIndex(g => g.key === anchor.key), c = dec.children[groups.length + i];
+    dec.scrollLeft = c.offsetLeft - anchor.x;
+    shade();
+    return c;
+  } else if (centerNext){
     // put the 2020s (or the latest decade, if there's nothing from the 2020s) in the middle, in the second copy
     centerNext = false;
-    const ds = groups.map(([d]) => +d), i = ds.includes(2020) ? ds.indexOf(2020) : ds.indexOf(Math.max(...ds));
+    const ds = groups.map(g => g.decade || +g.key), i = ds.includes(2020) ? ds.indexOf(2020) : ds.indexOf(Math.max(...ds));
     const c = dec.children[groups.length + i];
     let x = c.offsetLeft + c.offsetWidth / 2 - dec.clientWidth / 2;
     if (x < setW) x += setW;
     dec.scrollLeft = x;
   } else dec.scrollLeft = setW + Math.max(0, Math.min(offset, setW - 1));
+  shade();
 }
 function wrap(){
-  if (!setW) return;
+  if (!setW || sliding) return;
   if (dec.scrollLeft < setW) dec.scrollLeft += setW;
   else if (dec.scrollLeft >= 2 * setW) dec.scrollLeft -= setW;
 }
 dec.addEventListener("scroll", e => {
   const c = e.target;
-  if (c === dec) return wrap();
+  if (c === dec){ wrap(); return shade(); }
   if (!c.classList || !c.classList.contains("col")) return;
   if (expected.has(c) && Math.abs(expected.get(c) - c.scrollTop) < 1){ expected.delete(c); return; }
   expected.delete(c);
@@ -1255,7 +1285,7 @@ dec.addEventListener("click", e => {
   if (!h) return;
   // switch this decade between release order and your ranking, go back to the top, and bring it to the middle
   const col = h.parentElement, d = col.dataset.decade;
-  showDecade(d, !isRanked(d));
+  if (!col.classList.contains("yr")) showDecade(d, !isRanked(d)); // a year has no ranking to switch to
   glideTo(col.offsetLeft + col.offsetWidth / 2 - dec.clientWidth / 2);
 });
 // slide the decades sideways to x
@@ -1277,13 +1307,97 @@ for (const ev of ["pointermove", "pointerdown", "wheel", "keydown", "touchstart"
   addEventListener(ev, () => { lastInput = performance.now(); driftAt = 0; }, { passive: true, capture: true });
 requestAnimationFrame(function drift(now){
   requestAnimationFrame(drift);
-  if (view !== "decades" || !setW || glide || drag || !menu.classList.contains("hidden") || now - lastInput < IDLE_MS){ driftAt = 0; return; }
+  if (view !== "decades" || !setW || glide || sliding || drag || !menu.classList.contains("hidden") || !dmenu.classList.contains("hidden") || now - lastInput < IDLE_MS){ driftAt = 0; return; }
   if (!driftAt || Math.abs(driftX - dec.scrollLeft) > 2) driftX = dec.scrollLeft; // start from wherever it is now
   if (driftAt) driftX += DRIFT * Math.min(100, now - driftAt) / 1000;
   driftAt = now;
   dec.scrollLeft = driftX;
   if (dec.scrollLeft >= 2 * setW){ wrap(); driftX = dec.scrollLeft; }
 });
+/* right-click a decade title to spread it out into its years, and a year title to fold them back */
+const dmenu = $("#dmenu");
+let dmenuFor = null;
+const closeDmenu = () => { dmenu.classList.add("hidden"); dmenuFor = null; };
+dec.addEventListener("contextmenu", e => {
+  const h = e.target.closest(".col h2");
+  if (!h) return;
+  e.preventDefault();
+  if (drag || sliding) return;
+  closeMenu();
+  const col = h.parentElement, yr = col.classList.contains("yr");
+  dmenuFor = col;
+  dmenu.querySelector('[data-act="expand"]').classList.toggle("hidden", yr);
+  dmenu.querySelector('[data-act="collapse"]').classList.toggle("hidden", !yr);
+  dmenu.classList.remove("hidden");
+  dmenu.style.left = Math.min(e.clientX, innerWidth - dmenu.offsetWidth - 4) + "px";
+  dmenu.style.top = Math.min(e.clientY, innerHeight - dmenu.offsetHeight - 4) + "px";
+});
+dmenu.onclick = e => {
+  const act = e.target.closest("button")?.dataset.act, col = dmenuFor;
+  closeDmenu();
+  if (!col || sliding) return;
+  if (act === "expand") expandDecade(+col.dataset.decade, col);
+  if (act === "collapse") collapseDecade(+col.dataset.of, col);
+};
+addEventListener("pointerdown", e => { if (!e.target.closest("#dmenu")) closeDmenu(); }, true);
+addEventListener("keydown", e => { if (e.key === "Escape") closeDmenu(); });
+addEventListener("wheel", closeDmenu, { passive: true });
+addEventListener("blur", closeDmenu);
+
+let sliding = false; // set while years slide out or back in
+const screenX = el => el.getBoundingClientRect().left - dec.getBoundingClientRect().left;
+function expandDecade(d, col){
+  cancelAnimationFrame(glide); glide = 0;
+  expanded = d;
+  // lay out the years, keep the decade's first year where the decade was, then let the rest slide out
+  const anchor = renderDecades({ key: "y" + d, x: screenX(col) });
+  slideYears([...dec.querySelectorAll(`.col.yr:not([data-decade="y${d}"])`)], 0, 1, anchor);
+}
+// grow (0 to 1) or shrink (1 to 0) the year columns, keeping the anchor column still on screen
+// (or gliding it to screen position x1 as they go)
+function slideYears(cols, from, to, anchor, done, x1){
+  const w = anchor.offsetWidth, gap = parseFloat(getComputedStyle(dec).columnGap) || 4, ms = 420, t0 = performance.now();
+  const x0 = screenX(anchor);
+  if (x1 == null) x1 = x0;
+  let k = 0;
+  sliding = true;
+  // the title and albums keep their full width, so each year is uncovered rather than squeezed
+  for (const c of cols) for (const k of c.children) k.style.width = w + "px";
+  const set = f => {
+    for (const c of cols){ c.style.flex = `0 0 ${w * f}px`; c.style.marginLeft = `${-gap * (1 - f)}px`; }
+    dec.scrollLeft += screenX(anchor) - (x0 + (x1 - x0) * k);
+  };
+  set(from);
+  const step = now => {
+    const t = Math.min(1, (now - t0) / ms);
+    k = 1 - Math.pow(1 - t, 3);
+    set(from + (to - from) * k);
+    if (t < 1) return requestAnimationFrame(step);
+    for (const c of cols){ c.style.flex = ""; c.style.marginLeft = ""; for (const k of c.children) k.style.width = ""; }
+    sliding = false;
+    if (done) done(); else { wrap(); shade(); }
+  };
+  requestAnimationFrame(step);
+}
+// darken the other decades while the middle of the screen is on an expanded decade's years
+function shade(){
+  const r = dec.getBoundingClientRect();
+  const at = expanded != null && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest(".col");
+  dec.classList.toggle("shade", !!(at && at.classList.contains("yr")));
+}
+function collapseDecade(d, col){
+  cancelAnimationFrame(glide); glide = 0;
+  // find this copy's first year, which turns back into the decade
+  let first = col;
+  while (first && first.dataset.decade !== "y" + d) first = first.previousElementSibling;
+  if (!first) first = col;
+  // the years fold back into the decade, which ends up where the year you clicked was
+  const extra = [...dec.querySelectorAll(`.col.yr:not([data-decade="y${d}"])`)];
+  slideYears(extra, 1, 0, first, () => {
+    expanded = null;
+    renderDecades({ key: String(d), x: screenX(first) });
+  }, screenX(col));
+}
 function showDecade(d, rank){
   LS.set("mode." + d, rank ? "rank" : "chrono");
   const list = albums.filter(a => a.year && Math.floor(a.year / 10) * 10 === +d);
