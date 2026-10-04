@@ -246,7 +246,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-search-artist";
+const BUILD = "2026-10-04 wall-fill-1";
 // Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
 // On every visit the page quietly fetches the newest copy; if it differs from what's running, the
 // browser stores it and the page reloads itself once, before anything is drawn.
@@ -554,14 +554,6 @@ function ready(){
   if (view === "pantheon") renderPantheon();
   if (view === "ipod") showIpod();
 }
-const safe = p => api(p).catch(e => { if (e.status === 401 || e.status === 403) throw e; return null; });
-
-// run fn over items, a few at a time, keeping results in order
-async function pool(items, n, fn){
-  const out = new Array(items.length); let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length){ const k = i++; out[k] = await fn(items[k]); } }));
-  return out;
-}
 // Your plays since a moment in time, newest first. Spotify hands them out 50 at a time, so this asks for one page,
 // and only goes further back (at most 3 more pages) when you've played more than 50 tracks since then.
 async function playsSince(t){
@@ -578,37 +570,37 @@ async function playsSince(t){
   return { items };
 }
 const addRecent = (col, recent) => col.add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
-// known: album ids already saved on this device. Then only the newest saved albums are fetched, page by page,
-// until one you already have turns up (older ones are kept anyway), so a visit asks Spotify for a handful
-// of pages instead of every page of your library, and Spotify doesn't start turning requests away.
-async function load(col, known = null, recent = null){
-  const recentP = recent || safe("/me/player/recently-played?limit=50"); // recent: an answer (or promise of one) already asked for
-  const topsP = Promise.all(["short_term", "medium_term", "long_term"].flatMap(r => [
-    safe(`/me/top/tracks?time_range=${r}&limit=50`),
-    safe(`/me/top/tracks?time_range=${r}&limit=50&offset=49`)
-  ]));
-  const first = await safe("/me/albums?limit=50");
-  const seen = p => (p?.items || []).some(i => known.has(i.album?.id));
-  let restP;
-  if (known){
-    restP = (async () => {
-      const pages = [];
-      for (let o = 50, last = first; last && !seen(last) && o < (first?.total || 0); o += 50) pages.push(last = await safe(`/me/albums?limit=50&offset=${o}`));
-      return pages;
-    })();
-  } else {
-    // first visit: ask for everything at once rather than one page after another
-    const offsets = [];
-    for (let o = 50; o < (first?.total || 0); o += 50) offsets.push(o);
-    restP = pool(offsets, 6, o => safe(`/me/albums?limit=50&offset=${o}`));
+// The whole library is fetched once per device: last plays, top tracks, then every saved album, one request at a
+// time so Spotify isn't flooded. Albums are saved after every answer and wall.fill remembers where it got to, so
+// if Spotify says slow down (or the page is closed) a later visit carries on from there instead of starting over.
+const FILL_STEPS = ["/me/player/recently-played?limit=50", ...["short_term", "medium_term", "long_term"].flatMap(r =>
+  [`/me/top/tracks?time_range=${r}&limit=50`, `/me/top/tracks?time_range=${r}&limit=50&offset=49`])];
+const filling = () => !!LS.get("fill");
+async function fillLibrary(){
+  const job = LS.get("fill") || { step: 0, offset: 0, total: null };
+  LS.set("fill", job);
+  // new albums go after the ones already saved, keeping the order: plays, then top tracks, then saved albums
+  const keep = c => LS.set(CACHE, mergeLibrary(LS.get(CACHE) || [], c.list));
+  try {
+    for (; job.step < FILL_STEPS.length; job.step++, LS.set("fill", job)){
+      const j = await api(FILL_STEPS[job.step]), c = collector();
+      if (job.step === 0) addRecent(c, j); else c.add((j?.items || []).map(t => t.album));
+      keep(c); await sleep(150);
+    }
+    for (; job.total === null || job.offset < job.total; job.offset += 50, LS.set("fill", job)){
+      const j = await api(`/me/albums?limit=50&offset=${job.offset}`), c = collector();
+      job.total = j?.total || 0;
+      c.add((j?.items || []).map(i => i.album)); keep(c); await sleep(150);
+    }
+    LS.del("fill"); LS.set("fullAt", Date.now());
+    dbg("whole library fetched:", (LS.get(CACHE) || []).length, "albums");
+    return true;
+  } catch(e){
+    if (e.status === 401 || e.status === 403) throw e;
+    if (e.status === 429 && !(LS.get("cooldown", {}).until > Date.now())) LS.set("cooldown", { until: Date.now() + 10 * 60000, mins: 10 });
+    dbg("library fetch paused at", job.step < FILL_STEPS.length ? FILL_STEPS[job.step].split("?")[0] : "saved albums " + job.offset + " of " + job.total, "·", e.status || "", e.message, "· carries on next visit");
+    return false;
   }
-
-  // then add them in wall order: 1. last 50 plays, newest first
-  addRecent(col, await recentP);
-  // 2. top tracks: 4 weeks, 6 months, all time
-  for (const p of await topsP) col.add((p?.items || []).map(t => t.album));
-  // 3. saved albums, most recently saved first
-  for (const p of [first, ...await restP]) col.add((p?.items || []).map(i => i.album));
 }
 
 /* ---------- original release years ---------- */
@@ -1976,6 +1968,7 @@ $("#form").onsubmit = async e => {
       const tk = LS.get("token", {}), when = ms => ms ? new Date(ms).toLocaleString() : "never";
       dbg("sign-in good until", when(tk.exp), "· has recent-plays permission:", (tk.scope || "").includes("user-read-recently-played") ? "yes" : "no (" + (tk.scope || "none recorded") + ")");
       dbg("newest play seen:", when(LS.get("playedSince", 0)), "· last asked:", when(LS.get("checkedAt", 0)), "· resting until:", when(cool.until));
+      const fill = LS.get("fill"); if (fill) dbg("whole-library fetch not finished yet: step", fill.step, "of", FILL_STEPS.length, "· saved albums", fill.offset, "of", fill.total ?? "?");
       dbg("earlier Spotify calls:\n  " + (LS.get("spotifyLog", []).slice(-20).map(c => new Date(c.t).toLocaleString() + "  " + c.p + "  → " + c.s + (c.ra ? " (retry after " + c.ra + "s)" : "") + "  " + c.ms + "ms").join("\n  ") || "none recorded yet"));
       dbg("?debug asks Spotify once now, even while resting");
     }
@@ -2032,13 +2025,18 @@ $("#form").onsubmit = async e => {
     dbg("top left now:", albums[0]?.title);
     ready();
     // Nothing else is asked for: everything older is already saved, so later visits only reshuffle by what you've played.
+    // The one exception: a device whose first fetch of the whole library was cut short carries on with it quietly,
+    // saving for next visit so nothing moves now.
+    if (filling() && !busy) fillLibrary().catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
     return;
   }
   try {
     $("#loading").classList.remove("hidden");
-    const col = collector(); await load(col);
+    await fillLibrary();
     if (await outdated()) return;
-    albums = mergeLibrary(col.list, LS.get(CACHE)); LS.set(CACHE, albums); LS.set("fullAt", Date.now()); ready();
+    albums = LS.get(CACHE) || [];
+    if (!albums.length){ $("#loading").textContent = "Spotify is busy right now. Try again in a few minutes."; return; }
+    ready();
   }
   catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); albums = []; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
