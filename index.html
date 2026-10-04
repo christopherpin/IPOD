@@ -1446,6 +1446,14 @@ let menuFor = null;
 function closeMenu(){ menu.classList.add("hidden"); menuFor = null; }
 const decadeOf = a => a.year ? Math.floor(a.year / 10) * 10 : null;
 document.addEventListener("contextmenu", e => {
+  // an artist on the iPod: the only choice is taking all of their albums off it
+  const artistRow = e.target.closest("#ipod .ip-row[data-artist]");
+  if (artistRow){
+    e.preventDefault();
+    menuFor = { ipodArtist: artistRow.dataset.artist };
+    for (const b of menu.querySelectorAll("button")) b.classList.toggle("hidden", b.dataset.act !== "ipodout");
+    return placeMenu(e);
+  }
   const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id]");
   if (!tile) return;
   e.preventDefault();
@@ -1464,21 +1472,30 @@ document.addEventListener("contextmenu", e => {
   menu.querySelector('[data-act="ipodout"]').classList.toggle("hidden", !onIpod);
   menu.querySelector('[data-act="ipodin"]').classList.toggle("hidden", !(tile.closest("#wall") && offIpod(album)));
   const pb = menu.querySelector('[data-act="pantheon"]');
-  pb.disabled = false;
+  pb.disabled = false; pb.classList.remove("hidden");
   const known = rec && LS.get("wax.spotify", {})[rec.id];
   pb.textContent = (rec ? known && inPantheon(byAnyId(known.id) || known) : inPantheon(album)) ? "Remove From Pantheon" : "Send To Pantheon";
   const qb = menu.querySelector('[data-act="queue"]');
-  qb.disabled = false;
+  qb.disabled = false; qb.classList.remove("hidden");
   qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue" : "Add To Queue";
   if (rec) spotifyFor(rec).catch(() => {});
+  placeMenu(e);
+});
+function placeMenu(e){
   menu.classList.remove("hidden");
   const w = menu.offsetWidth, h = menu.offsetHeight;
   menu.style.left = Math.min(e.clientX, innerWidth - w - 4) + "px";
   menu.style.top = Math.min(e.clientY, innerHeight - h - 4) + "px";
-});
+}
 menu.onclick = e => {
   const act = e.target.closest("button")?.dataset.act, album = menuFor;
   if (!act || !album) return;
+  if (album.ipodArtist){
+    // every album of theirs comes off; each can be put back from the Wall with Add To iPod
+    closeMenu();
+    for (const a of albums) if (a.artist === album.ipodArtist && !offIpod(a)) setOnIpod(a, false);
+    return;
+  }
   if (act === "pantheon" && album.wax){
     const btn = e.target.closest("button");
     if (btn.disabled) return;
