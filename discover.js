@@ -185,7 +185,8 @@ function sentences(wikitext){
       const text = clean(s.replace(/\u0001\d+\u0002/g, "")).replace(/\s+/g, " ").trim();
       if (text.length < 25) continue;
       const outlets = [...new Set(ids.map(i => outletOf(refs[i] || "")).filter(Boolean))];
-      out.push({ text, outlets });
+      const links = [...s.matchAll(/\[\[([^\]|#]+)/g)].map(m => m[1].trim()).filter(l => !/^(file|image|category):/i.test(l));
+      out.push({ text, outlets, links });
     }
   }
   return out;
@@ -360,6 +361,8 @@ function render(el, state, { onPick } = {}){
   el.replaceChildren(frag);
 }
 
-const Discover = { find, render, _test: { sentences, mentions, criticLine, outletOf, accolade, norm } };
+// shared with lineage.js, which asks the same places
+const Discover = { find, render, _src: { mbArtist, sparql, articleText, sentences, mentions, norm, cap, trim, list },
+  _test: { sentences, mentions, criticLine, outletOf, accolade, norm } };
 if (typeof window !== "undefined") window.Discover = Discover;
 })();
