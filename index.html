@@ -220,7 +220,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-6";
+const BUILD = "2026-10-04 wall-recent-7";
 // Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
 // On every visit the page quietly fetches the newest copy; if it differs from what's running, the
 // browser stores it and the page reloads itself once, before anything is drawn.
@@ -1660,7 +1660,18 @@ $("#form").onsubmit = async e => {
     }
     let settled = false;
     // a late answer isn't wasted: it still goes into the quiet refresh below, ready for next visit
-    const recentP = api("/me/player/recently-played?limit=50").then(j => { if (performance.now() - t0 > 8000) dbg("recent plays arrived late, after", Math.round(performance.now() - t0), "ms; saved for next visit"); return j; })
+    // Only ask for plays since the last one we saw (with a 5-hour buffer); everything older is already saved.
+    const since = LS.get("playedSince", 0);
+    const recentP = api("/me/player/recently-played?limit=50" + (since ? "&after=" + (since - 5 * 3600e3) : "")).then(j => {
+        const newest = Math.max(0, ...(j?.items || []).map(i => Date.parse(i.played_at) || 0));
+        if (newest > since) LS.set("playedSince", newest);
+        if (performance.now() - t0 > 8000 && j?.items?.length){
+          // too late for this visit's drawing: save it so the next visit opens with these albums first
+          const rc = collector(); addRecent(rc, j); LS.set(CACHE, mergeLibrary(rc.list, LS.get(CACHE)));
+          dbg("recent plays arrived late, after", Math.round(performance.now() - t0), "ms; saved for next visit");
+        }
+        return j;
+      })
       .catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; })
       .then(j => {
         settled = true;
@@ -1690,8 +1701,10 @@ $("#form").onsubmit = async e => {
     // then fetch the full list (top tracks, saved albums) quietly for next time, so nothing moves now
     // if Spotify is already turning requests away, leave it alone this visit
     if (busy){ dbg("skipping the full refresh this visit so Spotify can cool down"); return; }
+    // Top tracks and newly saved albums change slowly: look at those at most once a day.
+    if (Date.now() - LS.get("fullAt", 0) < 24 * 3600e3){ dbg("top tracks and saved albums were checked today; only recent plays asked for"); return; }
     const col = collector();
-    load(col, new Set(cached.flatMap(a => a.ids || [a.id])), recentP).then(() => { if (col.list.length){ const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("full refresh saved for next time:", all.length, "albums"); } })
+    load(col, new Set(cached.flatMap(a => a.ids || [a.id])), recentP).then(() => { if (col.list.length){ LS.set("fullAt", Date.now()); const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("daily refresh saved for next time:", all.length, "albums"); } })
       .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
     return;
   }
@@ -1699,7 +1712,7 @@ $("#form").onsubmit = async e => {
     $("#loading").classList.remove("hidden");
     const col = collector(); await load(col);
     if (await outdated()) return;
-    albums = mergeLibrary(col.list, LS.get(CACHE)); LS.set(CACHE, albums); ready();
+    albums = mergeLibrary(col.list, LS.get(CACHE)); LS.set(CACHE, albums); LS.set("fullAt", Date.now()); ready();
   }
   catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); albums = []; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
 })();
