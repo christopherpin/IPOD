@@ -96,6 +96,12 @@ body.decade-view{overflow:hidden}
 .pq img,.pslot img{cursor:grab;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
 .pq img.placeholder,.pslot img.placeholder{opacity:.15}
 .pslot.over,.pqueue.over{outline:2px solid var(--rank);outline-offset:-2px}
+/* wall search: a small field just above the Wall tab, shown while the Wall is open */
+.wsearch{position:fixed;z-index:21;width:240px}
+.wsearch input{width:100%;font:inherit;font-size:14px;color:var(--text);background:rgba(22,22,24,.92);border:1px solid #2a2a2e;border-radius:999px;padding:9px 16px;outline:none;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.wsearch input:focus{border-color:var(--rank)}
+.wsearch input::placeholder{color:var(--muted)}
+.wsearch.busy input{color:var(--muted)}
 .empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
 /* queue: albums you want to hear, found with one search bar that looks beyond Spotify */
 .queue{padding:0 4px 72px}
@@ -136,6 +142,8 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </div>
 <p class="empty hidden" id="loading">Loading…</p>
 <main class="wall" id="wall"></main>
+<p class="empty hidden" id="wallNone">No albums match</p>
+<div class="wsearch hidden" id="wsearch"><input id="wq" type="search" placeholder="Band, song, genre, 2020s, 2020" autocomplete="off" spellcheck="false" enterkeyhint="search"></div>
 <main class="decades hidden" id="decades"></main>
 <main class="pantheon hidden" id="pantheon"></main>
 <main class="wall hidden" id="wax"></main>
@@ -340,7 +348,13 @@ function fillGrid(el, list){
   }
   el.replaceChildren(frag);
 }
-const renderWall = () => fillGrid($("#wall"), albums);
+// the wall shows every album, or only those matching the search (wallFilter: album ids, in wall order)
+let wallFilter = null;
+function renderWall(){
+  const list = wallFilter ? albums.filter(a => wallFilter.has(a.id)) : albums;
+  fillGrid($("#wall"), list);
+  $("#wallNone").classList.toggle("hidden", !(wallFilter && view === "wall" && !list.length));
+}
 /* ---------- pantheon: your top 100, placed by hand ---------- */
 // slots: 100 places (album id or null); queue: albums sent to the Pantheon but not placed yet
 function pantheon(){
@@ -870,6 +884,70 @@ async function findOnSpotify(rec){
   return null;
 }
 
+/* ---------- wall search: band, song, genre, decade (2020s) or year (2020) ---------- */
+// Everything is worked out first, then the wall is redrawn once with only the albums that match.
+let searchRun = 0;
+async function searchWall(q){
+  const run = ++searchRun;
+  q = q.trim();
+  if (!q){ wallFilter = null; renderWall(); return; }
+  let keep;
+  const dec = q.match(/^'?(\d{2}|\d{4})'?s$/i), yr = q.match(/^(\d{4})$/);
+  if (dec && +dec[1] % 10 === 0){
+    let d = +dec[1]; if (d < 100) d += d >= 30 ? 1900 : 2000;
+    keep = a => a.year >= d && a.year <= d + 9;
+  } else if (yr){
+    keep = a => a.year === +yr[1];
+  } else {
+    const n = norm(q);
+    $("#wsearch").classList.add("busy");
+    // band or album title: from what's already here
+    const ids = new Set(albums.filter(a => norm(a.artist || "").includes(n) || norm(a.title || "").includes(n)).map(a => a.id));
+    const byKey = new Map(albums.map(a => [norm(cleanTitle(a.name || (a.title || "").split(" · ")[0])) + "|" + norm(a.artist || ""), a]));
+    const find = al => al && (albums.find(a => a.ids.includes(al.id)) || byKey.get(norm(cleanTitle(al.name || "")) + "|" + norm((al.artists || [])[0]?.name || "")));
+    const enc = encodeURIComponent;
+    // song names and genres: ask Spotify (a few small pages each), then keep the albums you have
+    const [tracks, artists] = await Promise.all([
+      Promise.all([0, 10, 20].map(o => safe(`/search?type=track&limit=10&offset=${o}&q=${enc(q)}`).catch(() => null))),
+      Promise.all([0, 10, 20].map(o => safe(`/search?type=artist&limit=10&offset=${o}&q=${enc(`genre:"${q}"`)}`).catch(() => null)))
+    ]);
+    if (run !== searchRun) return;
+    for (const t of tracks.flatMap(p => p?.tracks?.items || [])) if (t && norm(t.name || "").includes(n)){ const a = find(t.album); if (a) ids.add(a.id); }
+    const genreArtists = new Set(artists.flatMap(p => p?.artists?.items || []).filter(Boolean).map(x => norm(x.name || "")));
+    for (const a of albums) if (genreArtists.has(norm(a.artist || ""))) ids.add(a.id);
+    $("#wsearch").classList.remove("busy");
+    keep = a => ids.has(a.id);
+  }
+  if (run !== searchRun) return;
+  wallFilter = new Set(albums.filter(keep).map(a => a.id));
+  scrollTo(0, 0);
+  renderWall();
+}
+$("#wq").addEventListener("keydown", e => {
+  if (e.key === "Enter"){ e.preventDefault(); searchWall(e.target.value); if (matchMedia("(pointer: coarse)").matches) e.target.blur(); }
+  if (e.key === "Escape"){ e.target.value = ""; searchWall(""); }
+});
+$("#wq").addEventListener("input", e => { if (!e.target.value) searchWall(""); }); // clearing the field brings every album back
+// sits just above the Wall tab (beside it when the bar is on a side, below it when the bar is at the top)
+function placeSearch(){
+  const box = $("#wsearch");
+  box.classList.toggle("hidden", view !== "wall" || $("#views").classList.contains("hidden"));
+  if (box.classList.contains("hidden")) return;
+  const b = $('#views button[data-view="wall"]').getBoundingClientRect();
+  const w = Math.min(240, innerWidth - 16), h = 38, gap = 8;
+  const side = $("#views").classList.contains("dock-left") ? "left" : $("#views").classList.contains("dock-right") ? "right" : null;
+  let x, y;
+  if (side === "left"){ x = $("#views").getBoundingClientRect().right + gap; y = b.top + b.height / 2 - h / 2; }
+  else if (side === "right"){ x = $("#views").getBoundingClientRect().left - gap - w; y = b.top + b.height / 2 - h / 2; }
+  else {
+    x = b.left + b.width / 2 - w / 2;
+    const bar = $("#views").getBoundingClientRect();
+    y = bar.top > h + gap * 2 ? bar.top - gap - h : bar.bottom + gap;
+  }
+  Object.assign(box.style, { width: w + "px", left: Math.max(8, Math.min(innerWidth - w - 8, x)) + "px", top: Math.max(8, y) + "px" });
+}
+addEventListener("resize", () => placeSearch());
+
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
@@ -887,6 +965,8 @@ function setView(v){
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
+  $("#wallNone").classList.toggle("hidden", !(v === "wall" && wallFilter && !albums.some(a => wallFilter.has(a.id))));
+  placeSearch();
 }
 $("#views").onclick = e => { const b = e.target.closest("button"); if (b && !barMoved) setView(b.dataset.view); };
 
@@ -909,6 +989,7 @@ function applyDock(){
   document.body.classList.toggle("phone", PHONE.matches);
   for (const s of SIDES){ bar.classList.toggle("dock-" + s, s === d && s !== "bottom"); document.body.classList.toggle("dock-" + s, s === d && s !== "bottom"); }
   measureDock();
+  placeSearch();
 }
 applyDock();
 PHONE.addEventListener?.("change", applyDock);
@@ -943,6 +1024,7 @@ bar.addEventListener("pointerdown", e => {
     applyDock();
     // glide from where it was let go into its snapped place
     const to = bar.getBoundingClientRect();
+    setTimeout(placeSearch, 200);
     if (bar.animate) bar.animate([{ translate: `${from.left - to.left}px ${from.top - to.top}px` }, { translate: "0 0" }], { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" });
     setTimeout(() => { barMoved = false; }, 0);
   };
