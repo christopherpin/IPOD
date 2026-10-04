@@ -28,9 +28,9 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .views button::after{content:attr(data-label);height:0;overflow:hidden;visibility:hidden;font-size:14px;font-weight:700}
 .views button.on{color:var(--rank);background:#000;font-size:14px;font-weight:700}
 /* iPod sits in the middle and is always bigger than the rest */
-.views button.hub{font-size:15px;font-weight:700;color:var(--text)}
-.views button.hub::after{font-size:17px}
-.views button.hub.on{color:var(--rank);font-size:17px}
+/* thin white lines between the groups: Queue | Discover Lineage Decades | iPod Wall Wax | Pantheon */
+.views .sep{flex:0 0 1px;align-self:stretch;margin:7px 3px;background:rgba(255,255,255,.7)}
+.views.dock-left .sep,.views.dock-right .sep{flex-basis:1px;margin:3px 10px}
 @media (max-width:520px){.views button{padding:8px 7px;font-size:11px}}
 /* the bar can be dragged to any edge; it snaps to the nearest one and stays there (wall.dock) */
 .views{touch-action:none;user-select:none;-webkit-user-select:none}
@@ -61,8 +61,7 @@ body.phone .tiles{padding-bottom:4px}
 body.phone .views{--u:min(1px,.22vw)}
 body.phone .views button{padding:0 2px;font-size:calc(11 * var(--u));border-radius:8px}
 body.phone .views button::after,body.phone .views button.on{font-size:calc(13 * var(--u))}
-body.phone .views button.hub{font-size:calc(14 * var(--u))}
-body.phone .views button.hub::after,body.phone .views button.hub.on{font-size:calc(16 * var(--u))}
+body.phone .views .sep{margin:8px 1px}
 
 /* decades: one column per decade, loops left/right, each column scrolls on its own */
 body.decade-view{overflow:hidden}
@@ -145,7 +144,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 <p class="empty hidden" id="loading">Loading…</p>
 <main class="wall" id="wall"></main>
 <p class="empty hidden" id="wallNone">No albums match</p>
-<div class="wsearch hidden" id="wsearch"><input id="wq" type="search" placeholder="find something" autocomplete="off" spellcheck="false" enterkeyhint="search"></div>
+<div class="wsearch hidden" id="wsearch"><input id="wq" type="search" placeholder="Find Something..." autocomplete="off" spellcheck="false" enterkeyhint="search"></div>
 <main class="decades hidden" id="decades"></main>
 <main class="pantheon hidden" id="pantheon"></main>
 <main class="wall hidden" id="wax"></main>
@@ -189,14 +188,17 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="remove">Remove From Queue</button>
 </div>
 <nav class="views hidden" id="views">
-  <button data-view="discover" data-label="Discover">Discover</button>
   <button data-view="queue" data-label="Queue">Queue</button>
+  <span class="sep"></span>
+  <button data-view="discover" data-label="Discover">Discover</button>
+  <button data-view="lineage" data-label="Lineage">Lineage</button>
   <button data-view="decades" data-label="Decades">Decades</button>
-  <button data-view="ipod" data-label="iPod" class="hub">iPod</button>
+  <span class="sep"></span>
+  <button data-view="ipod" data-label="iPod">iPod</button>
   <button data-view="wall" data-label="Wall">Wall</button>
   <button data-view="wax" data-label="Wax">Wax</button>
+  <span class="sep"></span>
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
-  <button data-view="lineage" data-label="Lineage">Lineage</button>
 </nav>
 
 <script src="ipod.js"></script>
