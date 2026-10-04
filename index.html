@@ -209,7 +209,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-5";
+const BUILD = "2026-10-04 wall-recent-6";
 // Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
 // On every visit the page quietly fetches the newest copy; if it differs from what's running, the
 // browser stores it and the page reloads itself once, before anything is drawn.
@@ -1533,11 +1533,26 @@ $("#form").onsubmit = async e => {
     const wait = setTimeout(() => $("#loading").classList.remove("hidden"), 600);
     let signedOut = false, busy = false;
     const t0 = performance.now();
+    // After Spotify says "slow down", leave it alone for a while (longer each time it repeats), so
+    // reloading the page doesn't keep restarting its timer. The saved wall shows meanwhile.
+    const cool = LS.get("cooldown", { until: 0, mins: 0 });
+    if (Date.now() < cool.until){
+      dbg("giving Spotify a rest until", new Date(cool.until).toLocaleTimeString(), "· showing the saved wall");
+      if (await outdated()) return;
+      albums = cached; ready(); return;
+    }
+    let settled = false;
     // a late answer isn't wasted: it still goes into the quiet refresh below, ready for next visit
     const recentP = api("/me/player/recently-played?limit=50").then(j => { if (performance.now() - t0 > 8000) dbg("recent plays arrived late, after", Math.round(performance.now() - t0), "ms; saved for next visit"); return j; })
-      .catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; });
+      .catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; })
+      .then(j => {
+        settled = true;
+        if (busy){ const mins = Math.min(120, (cool.mins || 5) * 2); LS.set("cooldown", { until: Date.now() + mins * 60000, mins }); dbg("will wait", mins, "minutes before asking Spotify again"); }
+        else if (j) LS.del("cooldown");
+        return j;
+      });
     const recent = await Promise.race([recentP,
-      sleep(8000).then(() => { dbg("recent plays took too long, showing the saved wall"); return null; })]);
+      sleep(8000).then(() => { if (!settled) dbg("recent plays took too long, showing the saved wall"); return null; })]);
     clearTimeout(wait);
     if (await outdated()) return;
     if (recent) dbg("recent plays answered in", Math.round(performance.now() - t0), "ms");
