@@ -1437,9 +1437,10 @@ function slideYears(cols, from, to, anchor, done, x1){
     k = 1 - Math.pow(1 - t, 3);
     set(from + (to - from) * k);
     if (t < 1) return requestAnimationFrame(step);
+    const xEnd = screenX(anchor); // read before the columns get their normal width back
     for (const c of cols){ c.style.flex = ""; c.style.marginLeft = ""; for (const k of c.children) k.style.width = ""; }
     sliding = false;
-    if (done) done(); else { wrap(); shade(); }
+    if (done) done(xEnd); else { wrap(); shade(); }
   };
   requestAnimationFrame(step);
 }
@@ -1455,12 +1456,12 @@ function collapseDecade(d, col){
   let first = col;
   while (first && first.dataset.decade !== "y" + d) first = first.previousElementSibling;
   if (!first) first = col;
-  // the years fold back into the decade, which ends up where the year you clicked was
+  // the years fold back into the decade, which stays exactly where it is on screen
   const extra = [...dec.querySelectorAll(`.col.yr:not([data-decade="y${d}"])`)];
-  slideYears(extra, 1, 0, first, () => {
+  slideYears(extra, 1, 0, first, x => {
     expanded = null;
-    renderDecades({ key: String(d), x: screenX(first) });
-  }, screenX(col));
+    renderDecades({ key: String(d), x });
+  });
 }
 function showDecade(d, rank){
   LS.set("mode." + d, rank ? "rank" : "chrono");
