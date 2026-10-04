@@ -28,3 +28,8 @@ body.phone .dz-row{gap:14px;padding:4px 16px 12px}
 .dz-more{min-width:170px;margin-top:12px;font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:var(--tile);border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
 .dz-more:hover:not(:disabled){color:var(--text)}
 .dz-more:disabled{cursor:default}
+.dz-rate{display:flex;gap:6px;margin-top:8px}
+.dz-rate button{font:14px/1 system-ui,sans-serif;background:var(--tile);border:0;border-radius:999px;padding:6px 10px;cursor:pointer;filter:grayscale(1);opacity:.55}
+.dz-rate button:hover{opacity:.9}
+.dz-rate button.on{filter:none;opacity:1;background:#2a2a2e}
+.dz-tile.no .dz-cover,.dz-tile.no .dz-title,.dz-tile.no .dz-sub,.dz-tile.no .dz-why,.dz-tile.no .dz-kind{opacity:.3}

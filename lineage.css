@@ -16,7 +16,7 @@
 .lg-sub{color:var(--muted);font-size:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lg-why{margin:6px 0 0;font-size:12px;line-height:1.5;color:#b4b4ba}
 .lg-row{display:flex;align-items:flex-start;gap:20px;padding:4px 24px 12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:#2a2a2e transparent}
-.lg-row::before,.lg-row::after{content:"";flex:0 0 calc(50vw - 200px)}
+.lg-row::before,.lg-row::after{content:"";flex:0 0 calc(50% - 20px - clamp(100px,17vh,160px))}
 .lg-hero{flex:0 0 auto;width:clamp(200px,34vh,320px);display:flex;flex-direction:column;align-items:center;text-align:center}
 .lg-art{width:100%;aspect-ratio:1;background:var(--tile);box-shadow:0 24px 60px rgba(0,0,0,.55)}
 .lg-art img{display:block;width:100%;height:100%;object-fit:cover;user-select:none;-webkit-user-drag:none}
@@ -35,3 +35,4 @@ body.phone .lg-side{flex-basis:140px;width:140px}
 body.phone .lg-row{gap:14px;padding:4px 16px 12px}
 body.phone .lg-cover{flex-basis:80px;width:80px}
 body.phone .lg-hero{width:min(62vw,34vh)}
+body.phone .lg-row::before,body.phone .lg-row::after{flex-basis:calc(50% - 14px - min(31vw,17vh))}
