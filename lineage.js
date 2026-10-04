@@ -130,8 +130,8 @@ async function find(seed){
   const [g1, artistArticle] = await Promise.all([cap(influences([mbid]), 15000, []), cap(S.sparql(`
 SELECT ?article WHERE { ?a wdt:P434 "${esc(mbid)}" . ?article schema:about ?a ; schema:isPartOf <https://en.wikipedia.org/> . } LIMIT 1`), 9000, [])]);
   const artTitle = decodeURIComponent((artistArticle[0]?.article || "").split("/wiki/")[1] || "").replace(/_/g, " ");
-  const texts = await Promise.all([seedWiki ? S.articleText(seedWiki.title) : "", artTitle ? S.articleText(artTitle) : ""].map(p => cap(Promise.resolve(p), 9000, "")));
-  const critSents = texts.flatMap(t => S.sentences(t)).filter(s => s.outlets.length && INFLUENCE.test(s.text) && s.links.length);
+  const texts = await Promise.all([seedWiki?.title, artTitle].map(t => cap(S.criticSentences(t), 9000, [])));
+  const critSents = texts.flat().filter(s => s.outlets.length && INFLUENCE.test(s.text) && s.links.length);
   const linked = await cap(artistsByTitle([...new Set(critSents.flatMap(s => s.links))]), 12000, []);
 
   // 2. first generation either side
