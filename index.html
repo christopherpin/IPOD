@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
-<link rel="stylesheet" href="ipod.css?v=2026-10-04e">
-<link rel="stylesheet" href="discover.css?v=2026-10-04e">
+<link rel="stylesheet" href="ipod.css?v=2026-10-04f">
+<link rel="stylesheet" href="discover.css?v=2026-10-04f">
+<link rel="stylesheet" href="lineage.css?v=2026-10-04f">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -135,13 +136,9 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 .sharebox a{display:block;margin-top:4px;color:var(--rank);text-decoration:none}
 #shareSetup{z-index:25;background:rgba(11,11,12,.94)}
 #shareSetup a{color:var(--rank)}
-/* lineage: for now, just the one album sent there, sitting in the middle */
-.lgone{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px}
-.lgone img{display:block;width:clamp(180px,40vh,380px);aspect-ratio:1;object-fit:cover;background:var(--tile);box-shadow:0 24px 60px rgba(0,0,0,.55)}
-.lgone .name{font:700 22px/1.2 "Helvetica Neue",Helvetica,Arial,sans-serif;text-align:center}
-.lgone .sub{color:var(--muted);font-size:13px;text-align:center}
-.lgone p{margin:0;color:var(--muted)}
-body.dock-top .lgone{top:var(--dock)} body.dock-left .lgone{left:var(--dock)} body.dock-right .lgone{right:var(--dock)} body.phone .lgone{bottom:var(--dock)}
+#claudeSetup{z-index:25;background:rgba(11,11,12,.94)}
+#claudeSetup a{color:var(--rank)}
+#claudeSetup ol{margin:0;padding-left:20px;color:var(--muted);font-size:12px;line-height:1.6;text-align:left}
 </style>
 </head>
 <body>
@@ -166,7 +163,7 @@ body.dock-top .lgone{top:var(--dock)} body.dock-left .lgone{left:var(--dock)} bo
 </main>
 <main class="ipod hidden" id="ipod"></main>
 <main class="dz hidden" id="discover"></main>
-<main class="lgone hidden" id="lineage"></main>
+<main class="lg hidden" id="lineage"></main>
 <button class="sharebtn hidden" id="shareBtn">Share</button>
 <div class="sharebox hidden" id="shareBox"></div>
 <div class="setup hidden" id="shareSetup">
@@ -177,6 +174,20 @@ body.dock-top .lgone{top:var(--dock)} body.dock-left .lgone{left:var(--dock)} bo
     <p>Share saves a read-only copy of your iPod to <a href="share/" target="_blank" rel="noopener">your share page</a>. It needs a GitHub token, made once:
       <a href="https://github.com/settings/personal-access-tokens/new?name=IPOD%20Share&amp;description=Lets%20the%20Share%20button%20update%20the%20shared%20iPod&amp;target_name=christopherpin&amp;expires_in=none&amp;contents=write" target="_blank" rel="noopener">make one here</a>,
       choose Only select repositories, pick IPOD, then paste it above. It stays in this browser.</p>
+  </form>
+</div>
+<div class="setup hidden" id="claudeSetup">
+  <form id="claudeForm">
+    <input id="claudeKey" type="password" placeholder="Claude API key" autocomplete="off" spellcheck="false">
+    <button type="submit">Save and Ask Claude</button>
+    <p id="claudeMsg"></p>
+    <p>Lineage asks Claude about each album you send there. It needs a Claude API key, made once:</p>
+    <ol>
+      <li>Open <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">the Claude Console</a> and sign in.</li>
+      <li>Under Billing, add a little credit. Setting a monthly limit there is a good idea.</li>
+      <li>Under API Keys, click Create Key, name it IPOD and copy it.</li>
+      <li>Paste it above. It stays in this browser.</li>
+    </ol>
   </form>
 </div>
 <div class="setup hidden" id="waxSetup">
@@ -223,9 +234,10 @@ body.dock-top .lgone{top:var(--dock)} body.dock-left .lgone{left:var(--dock)} bo
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
 </nav>
 
-<script src="ipod.js?v=2026-10-04e"></script>
-<script src="wiki.js?v=2026-10-04e"></script>
-<script src="discover.js?v=2026-10-04e"></script>
+<script src="ipod.js?v=2026-10-04f"></script>
+<script src="wiki.js?v=2026-10-04f"></script>
+<script src="discover.js?v=2026-10-04f"></script>
+<script src="lineage.js?v=2026-10-04f"></script>
 <script>
 "use strict";
 const LS = {
@@ -1110,22 +1122,93 @@ function discoverItem(i){
 
 // Family Tree was taken out: forget what it had saved
 LS.del("lineage"); LS.del("lineage.saved");
-/* ---------- lineage: Send To Lineage puts one album here, and it just sits there ---------- */
+/* ---------- lineage: Claude is asked about the album sent here and reports back (lineage.js) ---------- */
+// Claude's answers are kept per album, so opening an album again costs nothing and asks no one
+const LG_SAVED = "lineage.answers", LG_MAX = 60, lgAsking = new Map();
+let lgState = null;
+const lgKey = seed => resultKey(seed.name, seed.artist);
+const lgSaved = seed => LS.get(LG_SAVED, {})[lgKey(seed)] || null;
+function lgPut(seed, answer){
+  const all = LS.get(LG_SAVED, {});
+  all[lgKey(seed)] = { t: Date.now(), ...answer };
+  const keys = Object.keys(all).sort((a, b) => (all[b].t || 0) - (all[a].t || 0));
+  for (const k of keys.slice(LG_MAX)) delete all[k];
+  LS.set(LG_SAVED, all);
+}
 function toLineage(a){
   if (!a) return;
   LS.set("lineage.album", seedOf(a));
   setView("lineage");
 }
-function renderLineage(){
-  const el = $("#lineage"), a = LS.get("lineage.album");
-  if (!a){ el.replaceChildren(Object.assign(document.createElement("p"), { textContent: "Right-click any album and choose Send To Lineage." })); return; }
-  const img = new Image(); img.alt = ""; img.draggable = false;
-  if (a.src) img.src = a.src; else img.style.visibility = "hidden";
-  const big = (a.src || "").includes("ab67616d00001e02") ? a.src.replace("ab67616d00001e02", "ab67616d0000b273") : null;
-  if (big){ const hi = new Image(); hi.onload = () => { img.src = big; }; hi.src = big; }
-  el.replaceChildren(img, Object.assign(document.createElement("div"), { className: "name", textContent: a.name }),
-    Object.assign(document.createElement("div"), { className: "sub", textContent: [a.artist, a.year].filter(Boolean).join(" · ") }));
+function lgDraw(st){
+  lgState = st;
+  Lineage.render($("#lineage"), st, { onPick: r => toLineage(r), onAgain: () => lgAsk(st.seed) });
 }
+function renderLineage(){
+  const seed = LS.get("lineage.album");
+  if (!seed){ lgState = null; $("#lineage").replaceChildren(Object.assign(document.createElement("p"), { className: "lg-empty", textContent: "Right-click any album and choose Send To Lineage." })); return; }
+  const answer = lgSaved(seed);
+  if (lgAsking.has(lgKey(seed))) return lgAsk(seed);
+  if (answer){ lgDraw({ seed, answer }); lgCovers(seed, answer); return; }
+  if (!LS.get("claude.key")){ lgDraw({ seed, error: "Lineage needs a Claude key first." }); return claudeSetup(); }
+  lgAsk(seed);
+}
+function lgAsk(seed){
+  const k = lgKey(seed), old = lgSaved(seed);
+  if (!LS.get("claude.key")) return claudeSetup();
+  lgDraw({ seed, loading: true });
+  if (!lgAsking.has(k)) lgAsking.set(k, Lineage.ask(seed, LS.get("claude.key"))
+    .then(ans => { lgPut(seed, ans); return ans; }).finally(() => lgAsking.delete(k)));
+  const mine = () => view === "lineage" && LS.get("lineage.album") && lgKey(LS.get("lineage.album")) === k;
+  lgAsking.get(k).then(ans => { if (mine()){ lgDraw({ seed, answer: ans }); lgCovers(seed, ans); } }, e => {
+    if (e.kind === "key"){ LS.del("claude.key"); if (mine()) claudeSetup(e.message); }
+    if (mine()) lgDraw({ seed, answer: old, error: e.message });
+  });
+}
+// covers come from Deezer once, are kept with Claude's answer, and fade in where the album already sits
+function lgCovers(seed, answer){
+  const todo = [];
+  for (const list of ["later", "earlier", "same"]) answer[list].forEach((r, i) => { if (!r.looked) todo.push([list, i, r]); });
+  if (!todo.length) return;
+  Promise.all(todo.map(([list, i, r]) => Discover.cover(r.name, r.artist).then(c => {
+    if (!c) return;
+    r.looked = true; Object.assign(r, c);
+    const box = lgState && lgState.answer === answer && $(`#lineage .lg-card[data-list="${list}"][data-i="${i}"] .lg-cover`);
+    if (!box || !c.src) return;
+    const label = box.querySelector("i"), im = new Image(); im.alt = ""; im.draggable = false;
+    im.onload = () => { label.style.opacity = 0; im.classList.add("in"); };
+    im.onerror = () => im.remove();
+    im.src = c.src; box.appendChild(im);
+  }))).then(() => { const all = LS.get(LG_SAVED, {}); if (all[lgKey(seed)]) lgPut(seed, answer); });
+}
+// an album Claude named, in the shape a Wax record has, so the menu finds its Spotify version the same way
+function lineageItem(list, i){
+  const r = lgState?.answer?.[list]?.[i];
+  return r && { id: "lg:" + resultKey(r.name, r.artist), wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src, url: r.url, title: r.name + " · " + r.artist };
+}
+// the wheel over the middle row moves it sideways first, then carries on up or down the page at either end
+$("#lineage").addEventListener("wheel", e => {
+  const row = e.target.closest(".lg-row");
+  if (!row || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  const d = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? row.clientWidth : 1);
+  const max = row.scrollWidth - row.clientWidth;
+  if ((d > 0 && row.scrollLeft >= max - 1) || (d < 0 && row.scrollLeft <= 0)) return;
+  e.preventDefault();
+  row.scrollLeft += d;
+}, { passive: false });
+function claudeSetup(msg){
+  $("#claudeSetup").classList.remove("hidden"); $("#claudeMsg").textContent = msg || ""; $("#claudeKey").value = "";
+  $("#claudeKey").focus();
+}
+$("#claudeForm").onsubmit = e => {
+  e.preventDefault();
+  const k = $("#claudeKey").value.trim();
+  if (!k) return;
+  LS.set("claude.key", k); $("#claudeSetup").classList.add("hidden");
+  if (view === "lineage") renderLineage();
+};
+$("#claudeSetup").addEventListener("click", e => { if (e.target.id === "claudeSetup") e.target.classList.add("hidden"); });
+addEventListener("keydown", e => { if (e.key === "Escape") $("#claudeSetup").classList.add("hidden"); });
 
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod", "discover", "lineage"].includes(LS.get("view")) ? LS.get("view") : "wall";
@@ -1142,6 +1225,7 @@ function setView(v){
   document.body.classList.toggle("ipod-view", v === "ipod");
   if (v === "queue"){ renderQueue(); if (matchMedia("(pointer: fine)").matches) $("#qsearch").focus({ preventScroll: true }); }
   if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
+  if (v !== "lineage") $("#claudeSetup").classList.add("hidden");
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades"){ centerNext = true; renderDecades(); }
@@ -1602,13 +1686,14 @@ document.addEventListener("contextmenu", e => {
     for (const b of menu.querySelectorAll("button")) b.classList.toggle("hidden", b.dataset.act !== "ipodout");
     return placeMenu(e);
   }
-  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id], #discover .dz-tile");
+  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id], #discover .dz-tile, #lineage .lg-card");
   if (!tile) return;
   e.preventDefault();
   if (drag) return;
   // a Wax record stands in for its Spotify version, which is looked up straight away
   // so does an album in Discover's row
-  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i);
+  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i)
+    || tile.closest("#lineage") && lineageItem(tile.dataset.list, +tile.dataset.i);
   if (rec) rec.wax = true;
   const album = rec || (tile.closest("#pantheon, #ipod") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
   if (!album) return;

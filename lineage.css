@@ -1,0 +1,37 @@
+/* lineage: newest at the top. What the album influenced above it, its contemporaries either side, its influences below */
+.lg{position:fixed;inset:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:#2a2a2e transparent}
+.lg-empty{position:fixed;inset:0;margin:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.lg-up,.lg-down{min-height:50vh;display:flex;flex-direction:column;align-items:center;gap:14px;padding:0 16px}
+.lg-up{justify-content:flex-end;padding-top:32px;padding-bottom:26px}
+.lg-down{padding-top:26px;padding-bottom:110px}
+.lg-head{font:700 10px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--rank);text-align:center}
+.lg-card{display:flex;gap:14px;align-items:flex-start;width:100%;max-width:520px;cursor:pointer}
+.lg-cover{position:relative;flex:0 0 96px;width:96px;aspect-ratio:1;background:var(--tile);overflow:hidden}
+.lg-cover i{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:8px;text-align:center;font:600 11px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-style:normal;color:var(--muted)}
+.lg-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .4s;user-select:none;-webkit-user-drag:none}
+.lg-cover img.in{opacity:1}
+.lg-card:hover .lg-cover img.in{opacity:.85}
+.lg-txt{min-width:0;flex:1;padding-top:2px}
+.lg-title{font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lg-sub{color:var(--muted);font-size:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lg-why{margin:6px 0 0;font-size:12px;line-height:1.5;color:#b4b4ba}
+.lg-row{display:flex;align-items:flex-start;gap:20px;padding:4px 24px 12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:#2a2a2e transparent}
+.lg-row::before,.lg-row::after{content:"";flex:0 0 calc(50vw - 200px)}
+.lg-hero{flex:0 0 auto;width:clamp(200px,34vh,320px);display:flex;flex-direction:column;align-items:center;text-align:center}
+.lg-art{width:100%;aspect-ratio:1;background:var(--tile);box-shadow:0 24px 60px rgba(0,0,0,.55)}
+.lg-art img{display:block;width:100%;height:100%;object-fit:cover;user-select:none;-webkit-user-drag:none}
+.lg-name{margin-top:14px;font:700 22px/1.2 "Helvetica Neue",Helvetica,Arial,sans-serif}
+.lg-hero>.lg-sub{white-space:normal}
+.lg-note{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.45}
+.lg-same{margin-top:14px}
+.lg-side{flex:0 0 170px;width:170px;flex-direction:column;gap:0;margin-top:clamp(15px,calc(17vh - 85px),75px)}
+.lg-side .lg-cover{flex:none;width:100%}
+.lg-side .lg-txt{padding-top:10px;width:100%}
+body.dock-top .lg{top:var(--dock)}
+body.dock-left .lg{left:var(--dock)}
+body.dock-right .lg{right:var(--dock)}
+body.phone .lg{bottom:var(--dock)}
+body.phone .lg-side{flex-basis:140px;width:140px}
+body.phone .lg-row{gap:14px;padding:4px 16px 12px}
+body.phone .lg-cover{flex-basis:80px;width:80px}
+body.phone .lg-hero{width:min(62vw,34vh)}
