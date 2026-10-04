@@ -436,8 +436,7 @@ function render(el, state, { onPick, onMore } = {}){
   el.replaceChildren(frag);
 }
 
-// shared with lineage.js, which asks the same places
-const Discover = { find, render, _src: { log, mbArtist, sparql, articleText, sentences, criticSentences, mentions, norm, cap, trim, list },
+const Discover = { find, render,
   _test: { sentences, mentions, criticLine, outletOf, accolade, norm } };
 if (typeof window !== "undefined") window.Discover = Discover;
 })();
