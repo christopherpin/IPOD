@@ -190,10 +190,23 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 "use strict";
 const LS = {
   get(k, d=null){ try{ const v = localStorage.getItem("wall."+k); return v==null ? d : JSON.parse(v); }catch{ return d; } },
-  set(k, v){ try{ localStorage.setItem("wall."+k, JSON.stringify(v)); }catch{} },
+  set(k, v){ try{ localStorage.setItem("wall."+k, JSON.stringify(v)); return true; }catch{ dbg("couldn't save " + k + " (browser storage full?)"); return false; } },
   del(k){ try{ localStorage.removeItem("wall."+k); }catch{} }
 };
 const $ = s => document.querySelector(s);
+/* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
+const BUILD = "2026-10-04 wall-recent-2";
+const DEBUG = new URLSearchParams(location.search).has("debug");
+function dbg(...msg){
+  if (!DEBUG) return;
+  let box = document.getElementById("dbg");
+  if (!box){
+    box = document.createElement("pre"); box.id = "dbg";
+    box.style.cssText = "position:fixed;left:8px;top:8px;z-index:99;max-width:min(560px,calc(100vw - 16px));max-height:60vh;overflow:auto;margin:0;padding:10px;border-radius:8px;background:rgba(0,0,0,.88);color:#ffd400;font:11px/1.45 ui-monospace,Menlo,monospace;white-space:pre-wrap";
+    (document.body || document.documentElement).appendChild(box);
+  }
+  box.textContent += new Date().toLocaleTimeString() + "  " + msg.join(" ") + "\n";
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const CLIENT_ID = "813caa88dc414f8b8c3dd58c09e55c9f"; // set to your Spotify app's Client ID to skip typing it
 const REDIRECT = location.origin + location.pathname;
@@ -215,7 +228,7 @@ async function tokenRequest(params){
   const r = await fetch("https://accounts.spotify.com/api/token", { method:"POST",
     headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: new URLSearchParams(params) });
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error_description || j.error || "Token request failed");
+  if (!r.ok){ const e = new Error(j.error_description || j.error || "Token request failed"); e.status = 401; dbg("token refresh failed:", e.message); throw e; }
   const prev = LS.get("token", {});
   const tok = { access: j.access_token, refresh: j.refresh_token || prev.refresh, exp: Date.now() + (j.expires_in - 60) * 1000, scope: j.scope || prev.scope || "" };
   LS.set("token", tok); return tok;
@@ -238,6 +251,7 @@ async function accessToken(){
     refreshing ||= tokenRequest({ grant_type:"refresh_token", refresh_token:t.refresh, client_id:LS.get("clientId") })
       .finally(() => { refreshing = null; });
     t = await refreshing;
+    dbg("signed in again, good until", new Date(t.exp).toLocaleTimeString());
   }
   return t.access;
 }
@@ -1391,15 +1405,30 @@ $("#form").onsubmit = async e => {
   if (Array.isArray(cached) && cached.length){
     // Before drawing, ask Spotify for just the latest plays (one quick request) and put those albums first,
     // so the wall opens on what you've been listening to. Nothing is drawn until this is settled.
+    dbg("build", BUILD, "· saved albums:", cached.length, "· top left was:", cached[0]?.title);
     const wait = setTimeout(() => $("#loading").classList.remove("hidden"), 600);
-    const recent = await Promise.race([safe("/me/player/recently-played?limit=50").catch(() => null), sleep(4000).then(() => null)]);
+    let signedOut = false;
+    const recent = await Promise.race([
+      safe("/me/player/recently-played?limit=50").catch(e => { signedOut = e.status === 401; dbg("recent plays failed:", e.status || "", e.message); return null; }),
+      sleep(8000).then(() => { dbg("recent plays took too long, showing the saved wall"); return null; })]);
     clearTimeout(wait);
+    if (signedOut){
+      // Spotify no longer accepts this sign-in: ask to connect again rather than quietly showing an old wall
+      LS.del("token"); $("#loading").classList.add("hidden"); $("#views").classList.add("hidden");
+      return showSetup("Spotify needs you to connect again.");
+    }
     albums = cached;
-    if (recent?.items?.length){ const rc = collector(); addRecent(rc, recent); albums = mergeLibrary(rc.list, cached); LS.set(CACHE, albums); }
+    if (recent?.items?.length){
+      const rc = collector(); addRecent(rc, recent); albums = mergeLibrary(rc.list, cached); LS.set(CACHE, albums);
+      dbg("recent plays:", recent.items.length, "tracks →", rc.list.length, "albums, newest first:\n  " +
+        [...recent.items].sort((a, b) => b.played_at.localeCompare(a.played_at)).slice(0, 15)
+          .map(i => i.played_at.slice(5, 16).replace("T", " ") + "  " + i.track?.album?.name + " (" + i.track?.album?.album_type + ")").join("\n  "));
+    } else if (recent) dbg("Spotify returned no recent plays");
+    dbg("top left now:", albums[0]?.title);
     ready();
     // then fetch the full list (top tracks, saved albums) quietly for next time, so nothing moves now
     const col = collector();
-    load(col).then(() => { if (col.list.length) LS.set(CACHE, mergeLibrary(col.list, LS.get(CACHE))); })
+    load(col).then(() => { if (col.list.length){ const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("full refresh saved for next time:", all.length, "albums"); } })
       .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
     return;
   }
