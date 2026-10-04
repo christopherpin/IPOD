@@ -2,14 +2,15 @@
    what came out alongside it), does the research on the web, and reports back. The page only lays out the answer. */
 "use strict";
 (() => {
-// Gemini, with Google Search to research from; the newest Flash model first, a fixed one if that name ever goes away
-const MODELS = ["gemini-flash-latest", "gemini-2.5-flash"];
+// Gemini's free tier differs by model, and searching Google counts separately, so each is tried in turn
+// (with search first, then without) until one answers; the one that worked is tried first next time
+const MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-flash-lite-latest", "gemini-2.0-flash"];
 const API = "https://generativelanguage.googleapis.com/v1beta/models/";
 const log = (...a) => window.dbg && window.dbg("lineage: " + a.join(" "));
 const fail = (msg, kind) => Object.assign(new Error(msg), { kind });
 
 const SYSTEM = `You are a music historian helping someone explore where an album sits in music history.
-Research with Google Search before answering. Rely on reputable sources: critics and publications (Pitchfork, Rolling Stone, AllMusic, The Guardian, NME, The Wire, Village Voice Pazz & Jop, Spin, Mojo, Uncut, The Quietus), interviews with the artists, and Wikipedia statements that cite such sources.
+Research with Google Search before answering when it is available. Rely on reputable sources: critics and publications (Pitchfork, Rolling Stone, AllMusic, The Guardian, NME, The Wire, Village Voice Pazz & Jop, Spin, Mojo, Uncut, The Quietus), interviews with the artists, and Wikipedia statements that cite such sources.
 Only name real albums (LPs, EPs or compilations, never singles) that you are confident exist, with their original release year. Never invent a connection: every album must be backed by something you found or by well-established critical consensus.`;
 
 const ASK = s => `The album is "${s.name}" by ${s.artist}${s.year ? ` (${s.year})` : ""}.
@@ -43,26 +44,31 @@ function parse(text, seed){
 }
 
 async function ask(seed, key){
-  const body = JSON.stringify({
-    systemInstruction: { parts: [{ text: SYSTEM }] },
-    contents: [{ role: "user", parts: [{ text: ASK(seed) }] }],
-    tools: [{ google_search: {} }],
-  });
-  let j = null;
-  for (const model of MODELS){
+  const base = { systemInstruction: { parts: [{ text: SYSTEM }] }, contents: [{ role: "user", parts: [{ text: ASK(seed) }] }] };
+  const tries = [];
+  for (const search of [true, false]) for (const model of MODELS) tries.push({ model, search });
+  let last = null; try{ last = JSON.parse(localStorage.getItem("lineage.gemini")); }catch{}
+  const i = last ? tries.findIndex(t => t.model === last.model && t.search === last.search) : -1;
+  if (i > 0) tries.unshift(...tries.splice(i, 1));
+  let j = null, said = "", ok = null;
+  for (const t of tries){
+    const body = JSON.stringify(t.search ? { ...base, tools: [{ google_search: {} }] } : base);
     let r;
-    try{ r = await fetch(API + model + ":generateContent", { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body }); }
+    try{ r = await fetch(API + t.model + ":generateContent", { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body }); }
     catch(e){ log("network", e.message); throw fail("Couldn't reach Gemini. Check the internet connection and try again.", "busy"); }
     j = await r.json().catch(() => ({}));
-    const m = String(j.error?.message || ""), st = j.error?.status || "";
-    log(model, r.status, st, m.slice(0, 200));
-    if (r.status === 404) continue; // that model name isn't offered; try the next
+    const m = String(j.error?.message || "");
+    log(t.model, t.search ? "search" : "no search", r.status, m.slice(0, 300));
     if (/API_KEY_INVALID|API key not valid/i.test(m) || r.status === 401) throw fail("That Gemini key didn't work. Make a new one and paste it here.", "key");
-    if (r.status === 403) throw fail("That Gemini key isn't allowed to do this. Make a new one and paste it here.", "key");
-    if (r.status === 429) throw fail("Gemini's free limit is used up for now. Try again later, or tomorrow.", "busy");
-    if (!r.ok) throw fail(r.status >= 500 ? "Gemini is busy right now. Try again in a minute." : "Gemini couldn't answer this time. Try again in a minute.", "other");
-    break;
+    if (r.ok){ ok = t; break; }
+    said = said || m;
+    // not offered, no free allowance, busy or not allowed with search: move on to the next one
   }
+  if (!ok){
+    const short = said.split(/[.\n]/)[0].slice(0, 140);
+    throw fail("Gemini didn't answer with any of its free models. " + (short ? "Google said: " + short + "." : "Try again in a minute."), "busy");
+  }
+  try{ localStorage.setItem("lineage.gemini", JSON.stringify(ok)); }catch{}
   const c = j?.candidates?.[0];
   const text = (c?.content?.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join("");
   if (!text) throw fail("Gemini couldn't answer about this album.", "other");
