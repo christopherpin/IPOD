@@ -220,7 +220,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-7";
+const BUILD = "2026-10-04 wall-recent-8";
 // Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
 // On every visit the page quietly fetches the newest copy; if it differs from what's running, the
 // browser stores it and the page reloads itself once, before anything is drawn.
@@ -294,10 +294,26 @@ async function accessToken(){
   }
   return t.access;
 }
+// Every Spotify call is noted (time, what, answer, how long) in wall.spotifyLog, last 40 kept,
+// so ?debug can show what happened on earlier visits too.
+function logCall(path, status, ms, retryAfter){
+  try{
+    const log = LS.get("spotifyLog", []);
+    log.push({ t: Date.now(), p: path.split("?")[0].replace("/me/player/", "").replace("/me/", ""), s: status, ms: Math.round(ms), ra: retryAfter });
+    LS.set("spotifyLog", log.slice(-40));
+  }catch{}
+}
 async function api(path, tries=0){
   const tok = await accessToken();
-  const r = await fetch(path.startsWith("http") ? path : "https://api.spotify.com/v1" + path, { headers:{ Authorization:"Bearer "+tok } });
+  const t0 = performance.now();
+  let r;
+  try{ r = await fetch(path.startsWith("http") ? path : "https://api.spotify.com/v1" + path, { headers:{ Authorization:"Bearer "+tok } }); }
+  catch(e){ logCall(path, "network error", performance.now() - t0, null); throw e; }
+  logCall(path, r.status, performance.now() - t0, r.headers.get("Retry-After"));
   if (r.status === 429){
+    // Spotify's own "come back in N seconds", when the browser lets us read it
+    const ra = +r.headers.get("Retry-After");
+    if (ra > 5) LS.set("cooldown", { until: Date.now() + ra * 1000, mins: Math.ceil(ra / 60), fromSpotify: true });
     // Spotify says slow down: try once more after a short pause, then give up on this request
     // (browsers usually can't read Spotify's Retry-After, so the pause is a guess)
     const wait = +r.headers.get("Retry-After") || 2;
@@ -1652,7 +1668,14 @@ $("#form").onsubmit = async e => {
     // After Spotify says "slow down", leave it alone for a while (longer each time it repeats), so
     // reloading the page doesn't keep restarting its timer. The saved wall shows meanwhile.
     const cool = LS.get("cooldown", { until: 0, mins: 0 });
-    if (Date.now() < cool.until){
+    if (DEBUG){
+      const tk = LS.get("token", {}), when = ms => ms ? new Date(ms).toLocaleString() : "never";
+      dbg("sign-in good until", when(tk.exp), "· has recent-plays permission:", (tk.scope || "").includes("user-read-recently-played") ? "yes" : "no (" + (tk.scope || "none recorded") + ")");
+      dbg("newest play seen:", when(LS.get("playedSince", 0)), "· daily check:", when(LS.get("fullAt", 0)), "· resting until:", when(cool.until));
+      dbg("earlier Spotify calls:\n  " + (LS.get("spotifyLog", []).slice(-20).map(c => new Date(c.t).toLocaleString() + "  " + c.p + "  → " + c.s + (c.ra ? " (retry after " + c.ra + "s)" : "") + "  " + c.ms + "ms").join("\n  ") || "none recorded yet"));
+      dbg("?debug asks Spotify once now, even while resting");
+    }
+    if (Date.now() < cool.until && !DEBUG){
       dbg("giving Spotify a rest until", new Date(cool.until).toLocaleTimeString(), "· showing the saved wall");
       clearTimeout(wait);
       if (await outdated()) return;
@@ -1675,7 +1698,11 @@ $("#form").onsubmit = async e => {
       .catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; })
       .then(j => {
         settled = true;
-        if (busy){ const mins = Math.min(120, (cool.mins || 5) * 2); LS.set("cooldown", { until: Date.now() + mins * 60000, mins }); dbg("will wait", mins, "minutes before asking Spotify again"); }
+        if (busy){
+          const c = LS.get("cooldown", {});
+          if (c.fromSpotify && c.until > Date.now()) dbg("Spotify says come back at", new Date(c.until).toLocaleString());
+          else { const mins = Math.min(120, (cool.mins || 5) * 2); LS.set("cooldown", { until: Date.now() + mins * 60000, mins }); dbg("will wait", mins, "minutes before asking Spotify again"); }
+        }
         else if (j) LS.del("cooldown");
         return j;
       });
