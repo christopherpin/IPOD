@@ -372,7 +372,7 @@ function reason(kind, v){
 // Spotify's 300px cover address -> its 640px version of the very same image
 const sharper = src => /i\.scdn\.co\/image\/ab67616d00001e02/.test(src || "") ? src.replace("ab67616d00001e02", "ab67616d0000b273") : null;
 const LABEL = { sound: "Sounds like it", fans: "Fans also play", link: "Connected" };
-function render(el, state, { onPick, onMore } = {}){
+function render(el, state, { onPick, onMore, onRate, rateOf } = {}){
   const frag = document.createDocumentFragment();
   if (!state || !state.seed){
     const p = document.createElement("p"); p.className = "dz-empty";
@@ -428,6 +428,24 @@ function render(el, state, { onPick, onMore } = {}){
         Object.assign(document.createElement("div"), { className: "dz-title", textContent: r.name }),
         Object.assign(document.createElement("div"), { className: "dz-sub", textContent: [r.artist, r.year].filter(Boolean).join(" · ") }),
         Object.assign(document.createElement("p"), { className: "dz-why", textContent: r.why }));
+      // a good match is remembered as a link between the two albums; an unrelated one is kept out from now on
+      if (onRate){
+        const v = rateOf ? rateOf(r) : 0, box = document.createElement("div"); box.className = "dz-rate";
+        t.classList.toggle("no", v < 0);
+        for (const [n, glyph, tip] of [[1, "👍", "Good match"], [-1, "👎", "Not related"]]){
+          const b = document.createElement("button"); b.type = "button"; b.textContent = glyph; b.title = tip; b.dataset.v = n;
+          b.classList.toggle("on", v === n);
+          b.onclick = e => {
+            e.stopPropagation();
+            const now = b.classList.contains("on") ? 0 : n;
+            box.querySelectorAll("button").forEach(x => x.classList.toggle("on", +x.dataset.v === now));
+            t.classList.toggle("no", now < 0);
+            onRate(r, now);
+          };
+          box.appendChild(b);
+        }
+        t.appendChild(box);
+      }
       t.onclick = () => onPick && onPick(r);
       row.appendChild(t);
     });

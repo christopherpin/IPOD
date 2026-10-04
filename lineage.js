@@ -1,24 +1,15 @@
-/* lineage: Claude is asked three questions about one album (what it influenced, what influenced it,
+/* lineage: Gemini is asked three questions about one album (what it influenced, what influenced it,
    what came out alongside it), does the research on the web, and reports back. The page only lays out the answer. */
 "use strict";
 (() => {
-const SDK = ["https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm", "https://esm.sh/@anthropic-ai/sdk@0.131.0"];
-const MODEL = "claude-opus-5-5";
+// Gemini, with Google Search to research from; the newest Flash model first, a fixed one if that name ever goes away
+const MODELS = ["gemini-flash-latest", "gemini-2.5-flash"];
+const API = "https://generativelanguage.googleapis.com/v1beta/models/";
 const log = (...a) => window.dbg && window.dbg("lineage: " + a.join(" "));
-
-let sdk = null;
-async function client(key){
-  if (!sdk){
-    for (const url of SDK){
-      try{ sdk = (await import(url)).default; break; }catch(e){ log("couldn't load", url, e.message); }
-    }
-    if (!sdk) throw Object.assign(new Error("Couldn't reach Claude. Check the internet connection and try again."), { kind: "load" });
-  }
-  return new sdk({ apiKey: key, dangerouslyAllowBrowser: true, maxRetries: 2 });
-}
+const fail = (msg, kind) => Object.assign(new Error(msg), { kind });
 
 const SYSTEM = `You are a music historian helping someone explore where an album sits in music history.
-Research with web search before answering. Rely on reputable sources: critics and publications (Pitchfork, Rolling Stone, AllMusic, The Guardian, NME, The Wire, Village Voice Pazz & Jop, Spin, Mojo, Uncut, The Quietus), interviews with the artists, and Wikipedia statements that cite such sources.
+Research with Google Search before answering. Rely on reputable sources: critics and publications (Pitchfork, Rolling Stone, AllMusic, The Guardian, NME, The Wire, Village Voice Pazz & Jop, Spin, Mojo, Uncut, The Quietus), interviews with the artists, and Wikipedia statements that cite such sources.
 Only name real albums (LPs, EPs or compilations, never singles) that you are confident exist, with their original release year. Never invent a connection: every album must be backed by something you found or by well-established critical consensus.`;
 
 const ASK = s => `The album is "${s.name}" by ${s.artist}${s.year ? ` (${s.year})` : ""}.
@@ -38,7 +29,7 @@ Reply with only this JSON, no other text:
  "earlier": [same shape],
  "same": [same shape]}`;
 
-// the JSON in Claude's answer, cleaned up into the three lists the page shows
+// the JSON in Gemini's answer, cleaned up into the three lists the page shows
 function parse(text, seed){
   const a = text.indexOf("{"), b = text.lastIndexOf("}");
   if (a < 0 || b < a) throw new Error("no answer");
@@ -52,36 +43,31 @@ function parse(text, seed){
 }
 
 async function ask(seed, key){
-  const c = await client(key);
-  const messages = [{ role: "user", content: ASK(seed) }];
-  let msg;
-  try{
-    // a long search can pause partway; hand the turn back so Claude carries on where it stopped
-    for (let i = 0; i < 4; i++){
-      msg = await c.messages.stream({
-        model: MODEL, max_tokens: 16000, system: SYSTEM,
-        thinking: { type: "adaptive" }, output_config: { effort: "medium" },
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 }],
-        messages,
-      }).finalMessage();
-      log("stop", msg.stop_reason, JSON.stringify(msg.usage || {}));
-      if (msg.stop_reason !== "pause_turn") break;
-      messages.push({ role: "assistant", content: msg.content });
-    }
-  }catch(e){
-    const s = e.status;
-    const m = String(e.error?.error?.message || e.message || "");
-    log("error", s, m);
-    if (s === 401) throw Object.assign(new Error("That Claude key didn't work. Make a new one and paste it here."), { kind: "key" });
-    if (s === 403) throw Object.assign(new Error("That Claude key isn't allowed to do this. Make a new one and paste it here."), { kind: "key" });
-    if (/credit|billing|balance/i.test(m)) throw Object.assign(new Error("Your Claude account is out of credit. Add some under Billing at platform.claude.com, then try again."), { kind: "credit" });
-    if (s === 429 || s === 529 || s >= 500) throw Object.assign(new Error("Claude is busy right now. Try again in a minute."), { kind: "busy" });
-    throw Object.assign(new Error("Claude couldn't answer this time. Try again in a minute."), { kind: "other" });
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: SYSTEM }] },
+    contents: [{ role: "user", parts: [{ text: ASK(seed) }] }],
+    tools: [{ google_search: {} }],
+  });
+  let j = null;
+  for (const model of MODELS){
+    let r;
+    try{ r = await fetch(API + model + ":generateContent", { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body }); }
+    catch(e){ log("network", e.message); throw fail("Couldn't reach Gemini. Check the internet connection and try again.", "busy"); }
+    j = await r.json().catch(() => ({}));
+    const m = String(j.error?.message || ""), st = j.error?.status || "";
+    log(model, r.status, st, m.slice(0, 200));
+    if (r.status === 404) continue; // that model name isn't offered; try the next
+    if (/API_KEY_INVALID|API key not valid/i.test(m) || r.status === 401) throw fail("That Gemini key didn't work. Make a new one and paste it here.", "key");
+    if (r.status === 403) throw fail("That Gemini key isn't allowed to do this. Make a new one and paste it here.", "key");
+    if (r.status === 429) throw fail("Gemini's free limit is used up for now. Try again later, or tomorrow.", "busy");
+    if (!r.ok) throw fail(r.status >= 500 ? "Gemini is busy right now. Try again in a minute." : "Gemini couldn't answer this time. Try again in a minute.", "other");
+    break;
   }
-  if (msg.stop_reason === "refusal") throw Object.assign(new Error("Claude couldn't answer about this album."), { kind: "other" });
-  const text = msg.content.filter(b => b.type === "text").map(b => b.text).join("");
+  const c = j?.candidates?.[0];
+  const text = (c?.content?.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join("");
+  if (!text) throw fail("Gemini couldn't answer about this album.", "other");
   try{ return parse(text, seed); }
-  catch(e){ log("unreadable answer", text.slice(0, 300)); throw Object.assign(new Error("Claude's answer came back garbled. Try again."), { kind: "other" }); }
+  catch(e){ log("unreadable answer", text.slice(0, 300)); throw fail("Gemini's answer came back garbled. Try again.", "other"); }
 }
 
 /* ---------- drawing ---------- */
@@ -110,8 +96,10 @@ function card(r, list, i, onPick){
 const sortYear = (l, dir) => l.map((r, i) => [r, i]).sort((a, b) => dir * ((b[0].year || 0) - (a[0].year || 0)) || a[1] - b[1]);
 
 // newest at the top: what it influenced above, the album with its contemporaries either side in the middle, its influences below
-function render(el, state, { onPick, onAgain } = {}){
-  const s = state.seed, ans = state.answer, about = ans && ans.scope === "artist" ? s.artist : s.name;
+function render(el, state, { onPick, onAgain, onLinks } = {}){
+  const s = state.seed, links = state.links || [], linked = !!state.showLinks;
+  // the albums you linked on Discover stand in for Gemini's answer while they're shown
+  const ans = linked ? null : state.answer, about = ans && ans.scope === "artist" ? s.artist : s.name;
   const frag = document.createDocumentFragment();
 
   const up = make("section", "lg-up");
@@ -119,14 +107,14 @@ function render(el, state, { onPick, onAgain } = {}){
     if (ans.later.length){
       for (const [r, i] of sortYear(ans.later, 1)) up.appendChild(card(r, "later", i, onPick));
       up.appendChild(make("div", "lg-head", ans.scope === "artist" ? "↑ Influenced by " + s.artist + ", the artist" : "↑ Influenced by this album"));
-    } else up.appendChild(make("div", "lg-head", "Claude found nothing clearly influenced by " + about));
+    } else up.appendChild(make("div", "lg-head", "Gemini found nothing clearly influenced by " + about));
   }
   frag.appendChild(up);
 
   const mid = make("section", "lg-mid"), row = make("div", "lg-row");
-  const same = ans ? ans.same.map((r, i) => [r, i]) : [];
+  const same = linked ? links.map(r => ({ ...r, why: r.why || "Linked on Discover" })).map((r, i) => [r, i]) : ans ? ans.same.map((r, i) => [r, i]) : [];
   const left = same.filter((_, k) => k % 2 === 1).reverse(), right = same.filter((_, k) => k % 2 === 0);
-  const side = ([r, i]) => { const t = card(r, "same", i, onPick); t.classList.add("lg-side"); return t; };
+  const side = ([r, i]) => { const t = card(r, linked ? "links" : "same", i, onPick); t.classList.add("lg-side"); return t; };
   left.forEach(x => row.appendChild(side(x)));
   const hero = make("div", "lg-hero");
   const art = make("div", "lg-art"), img = new Image(); img.alt = ""; img.draggable = false;
@@ -135,16 +123,22 @@ function render(el, state, { onPick, onAgain } = {}){
   if (big){ const hi = new Image(); hi.onload = () => { img.src = big; }; hi.src = big; }
   art.appendChild(img);
   hero.append(art, make("div", "lg-name", s.name), make("div", "lg-sub", [s.artist, s.year].filter(Boolean).join(" · ")));
-  if (state.loading) hero.appendChild(make("p", "lg-note", "Asking Claude about " + s.name + "… this can take a minute."));
+  if (linked) hero.appendChild(make("p", "lg-note", links.length ? "Albums you linked to this one on Discover" : "Nothing is linked to this album yet. Give an album 👍 on Discover to link it."));
+  else if (state.loading) hero.appendChild(make("p", "lg-note", "Asking Gemini about " + s.name + "… this can take a minute."));
   else if (state.error) hero.appendChild(make("p", "lg-note", state.error));
   else if (ans){
-    const n = ans.scope === "artist" ? "There isn't much written about this album, so Claude answered about " + s.artist + ", the artist." : "";
+    const n = ans.scope === "artist" ? "There isn't much written about this album, so Gemini answered about " + s.artist + ", the artist." : "";
     if (n) hero.appendChild(make("p", "lg-note", n));
     if (same.length) hero.appendChild(make("div", "lg-head lg-same", "← Around the same time →"));
   }
-  if (onAgain && !state.loading && (ans || state.error)){
-    const b = make("button", "dz-more", ans ? "↻ Ask Claude again" : "↻ Try again"); b.type = "button";
+  if (onAgain && !linked && !state.loading && (ans || state.error)){
+    const b = make("button", "dz-more", ans ? "↻ Ask Gemini again" : "↻ Try again"); b.type = "button";
     b.onclick = () => onAgain();
+    hero.appendChild(b);
+  }
+  if (onLinks && (links.length || linked)){
+    const b = make("button", "dz-more", linked ? "Show Family Tree" : "Linked Albums (" + links.length + ")"); b.type = "button";
+    b.onclick = () => onLinks();
     hero.appendChild(b);
   }
   row.appendChild(hero);
@@ -156,7 +150,7 @@ function render(el, state, { onPick, onAgain } = {}){
     if (ans.earlier.length){
       down.appendChild(make("div", "lg-head", ans.scope === "artist" ? "↓ Influences on " + s.artist + ", the artist" : "↓ Influences on this album"));
       for (const [r, i] of sortYear(ans.earlier, 1)) down.appendChild(card(r, "earlier", i, onPick));
-    } else down.appendChild(make("div", "lg-head", "Claude found no clear influences on " + about));
+    } else down.appendChild(make("div", "lg-head", "Gemini found no clear influences on " + about));
   }
   frag.appendChild(down);
 

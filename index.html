@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
-<link rel="stylesheet" href="ipod.css?v=2026-10-04f">
-<link rel="stylesheet" href="discover.css?v=2026-10-04f">
-<link rel="stylesheet" href="lineage.css?v=2026-10-04f">
+<link rel="stylesheet" href="ipod.css?v=2026-10-04g">
+<link rel="stylesheet" href="discover.css?v=2026-10-04g">
+<link rel="stylesheet" href="lineage.css?v=2026-10-04g">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -136,9 +136,9 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 .sharebox a{display:block;margin-top:4px;color:var(--rank);text-decoration:none}
 #shareSetup{z-index:25;background:rgba(11,11,12,.94)}
 #shareSetup a{color:var(--rank)}
-#claudeSetup{z-index:25;background:rgba(11,11,12,.94)}
-#claudeSetup a{color:var(--rank)}
-#claudeSetup ol{margin:0;padding-left:20px;color:var(--muted);font-size:12px;line-height:1.6;text-align:left}
+#aiSetup{z-index:25;background:rgba(11,11,12,.94)}
+#aiSetup a{color:var(--rank)}
+#aiSetup ol{margin:0;padding-left:20px;color:var(--muted);font-size:12px;line-height:1.6;text-align:left}
 </style>
 </head>
 <body>
@@ -176,16 +176,15 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
       choose Only select repositories, pick IPOD, then paste it above. It stays in this browser.</p>
   </form>
 </div>
-<div class="setup hidden" id="claudeSetup">
-  <form id="claudeForm">
-    <input id="claudeKey" type="password" placeholder="Claude API key" autocomplete="off" spellcheck="false">
-    <button type="submit">Save and Ask Claude</button>
-    <p id="claudeMsg"></p>
-    <p>Lineage asks Claude about each album you send there. It needs a Claude API key, made once:</p>
+<div class="setup hidden" id="aiSetup">
+  <form id="aiForm">
+    <input id="aiKey" type="password" placeholder="Gemini API key" autocomplete="off" spellcheck="false">
+    <button type="submit">Save and Ask Gemini</button>
+    <p id="aiMsg"></p>
+    <p>Lineage asks Gemini about each album you send there. It needs a free Gemini key, made once:</p>
     <ol>
-      <li>Open <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">the Claude Console</a> and sign in.</li>
-      <li>Under Billing, add a little credit. Setting a monthly limit there is a good idea.</li>
-      <li>Under API Keys, click Create Key, name it IPOD and copy it.</li>
+      <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> and sign in with your Google account.</li>
+      <li>Click Create API key (accept the terms if it asks), then copy the key.</li>
       <li>Paste it above. It stays in this browser.</li>
     </ol>
   </form>
@@ -234,10 +233,10 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
 </nav>
 
-<script src="ipod.js?v=2026-10-04f"></script>
-<script src="wiki.js?v=2026-10-04f"></script>
-<script src="discover.js?v=2026-10-04f"></script>
-<script src="lineage.js?v=2026-10-04f"></script>
+<script src="ipod.js?v=2026-10-04g"></script>
+<script src="wiki.js?v=2026-10-04g"></script>
+<script src="discover.js?v=2026-10-04g"></script>
+<script src="lineage.js?v=2026-10-04g"></script>
 <script>
 "use strict";
 const LS = {
@@ -1100,12 +1099,41 @@ async function moreDiscover(){
   } else dzState = { ...st, busy: false, exhausted: true };
   if (view === "discover") renderDiscover();
 }
-// albums you've since added to your library drop out of the row
-let dzShown = null;
+/* likes and dislikes on Discover: a like links the two albums (both ways, shown on Lineage),
+   a dislike keeps that album out of this album's Discover from the next visit on */
+const albumRef = a => ({ name: a.name, artist: a.artist, year: a.year || null, src: a.src || "" });
+const pairKey = (x, y) => [resultKey(x.name, x.artist), resultKey(y.name, y.artist)].sort().join("~");
+function linksOf(a){
+  const k = resultKey(a.name, a.artist);
+  return Object.values(LS.get("links", {})).filter(l => l.k.includes(k))
+    .sort((x, y) => y.t - x.t).map(l => resultKey(l.a.name, l.a.artist) === k ? l.b : l.a);
+}
+const dzNo = seed => LS.get("discover.no", {})[resultKey(seed.name, seed.artist)] || [];
+let dzJustNo = new Set(); // disliked while you're looking: dimmed in place, gone next time
+function rateDiscover(r, v){
+  const seed = dzState?.seed; if (!seed) return;
+  const rk = resultKey(r.name, r.artist), sk = resultKey(seed.name, seed.artist);
+  const links = LS.get("links", {}), pk = pairKey(seed, r);
+  if (v > 0) links[pk] = { k: pk, a: albumRef(seed), b: albumRef(r), t: Date.now() }; else delete links[pk];
+  LS.set("links", links);
+  const no = LS.get("discover.no", {}), list = (no[sk] || []).filter(x => x !== rk);
+  if (v < 0){ list.push(rk); dzJustNo.add(rk); }
+  if (list.length) no[sk] = list; else delete no[sk];
+  LS.set("discover.no", no);
+}
+function rateOf(r){
+  const seed = dzState?.seed; if (!seed) return 0;
+  if (LS.get("links", {})[pairKey(seed, r)]) return 1;
+  return dzNo(seed).includes(resultKey(r.name, r.artist)) ? -1 : 0;
+}
+// albums you've since added to your library drop out of the row, as do ones you said weren't related
+let dzShown = null, dzShownSeed = null;
 function renderDiscover(){
-  const have = ownedSet();
-  dzShown = dzState?.recs ? { ...dzState, recs: dzState.recs.filter(r => !have.has(resultKey(r.name, r.artist))) } : dzState;
-  Discover.render($("#discover"), dzShown, { onPick: r => discover(r), onMore: moreDiscover });
+  const have = ownedSet(), seed = dzState?.seed;
+  if (dzShownSeed !== (seed && resultKey(seed.name, seed.artist))){ dzJustNo = new Set(); dzShownSeed = seed && resultKey(seed.name, seed.artist); }
+  const no = new Set(seed ? dzNo(seed).filter(k => !dzJustNo.has(k)) : []);
+  dzShown = dzState?.recs ? { ...dzState, recs: dzState.recs.filter(r => !have.has(resultKey(r.name, r.artist)) && !no.has(resultKey(r.name, r.artist))) } : dzState;
+  Discover.render($("#discover"), dzShown, { onPick: r => discover(r), onMore: moreDiscover, onRate: rateDiscover, rateOf });
 }
 // the mouse wheel anywhere on Discover moves the row of albums sideways
 $("#discover").addEventListener("wheel", e => {
@@ -1122,8 +1150,9 @@ function discoverItem(i){
 
 // Family Tree was taken out: forget what it had saved
 LS.del("lineage"); LS.del("lineage.saved");
-/* ---------- lineage: Claude is asked about the album sent here and reports back (lineage.js) ---------- */
-// Claude's answers are kept per album, so opening an album again costs nothing and asks no one
+/* ---------- lineage: Gemini is asked about the album sent here and reports back (lineage.js) ---------- */
+LS.del("claude.key"); // Lineage used Claude briefly; that key isn't needed any more
+// Gemini's answers are kept per album, so opening an album again costs nothing and asks no one
 const LG_SAVED = "lineage.answers", LG_MAX = 60, lgAsking = new Map();
 let lgState = null;
 const lgKey = seed => resultKey(seed.name, seed.artist);
@@ -1137,12 +1166,15 @@ function lgPut(seed, answer){
 }
 function toLineage(a){
   if (!a) return;
+  lgLinked = false;
   LS.set("lineage.album", seedOf(a));
   setView("lineage");
 }
+let lgLinked = false; // showing the albums you linked on Discover instead of Gemini's answer (until you switch back or leave)
 function lgDraw(st){
-  lgState = st;
-  Lineage.render($("#lineage"), st, { onPick: r => toLineage(r), onAgain: () => lgAsk(st.seed) });
+  lgState = { ...st, links: linksOf(st.seed), showLinks: lgLinked };
+  Lineage.render($("#lineage"), lgState, { onPick: r => toLineage(r), onAgain: () => lgAsk(st.seed),
+    onLinks: () => { lgLinked = !lgLinked; lgDraw(st); } });
 }
 function renderLineage(){
   const seed = LS.get("lineage.album");
@@ -1150,22 +1182,22 @@ function renderLineage(){
   const answer = lgSaved(seed);
   if (lgAsking.has(lgKey(seed))) return lgAsk(seed);
   if (answer){ lgDraw({ seed, answer }); lgCovers(seed, answer); return; }
-  if (!LS.get("claude.key")){ lgDraw({ seed, error: "Lineage needs a Claude key first." }); return claudeSetup(); }
+  if (!LS.get("gemini.key")){ lgDraw({ seed, error: "Lineage needs a Gemini key first." }); return aiSetup(); }
   lgAsk(seed);
 }
 function lgAsk(seed){
   const k = lgKey(seed), old = lgSaved(seed);
-  if (!LS.get("claude.key")) return claudeSetup();
+  if (!LS.get("gemini.key")) return aiSetup();
   lgDraw({ seed, loading: true });
-  if (!lgAsking.has(k)) lgAsking.set(k, Lineage.ask(seed, LS.get("claude.key"))
+  if (!lgAsking.has(k)) lgAsking.set(k, Lineage.ask(seed, LS.get("gemini.key"))
     .then(ans => { lgPut(seed, ans); return ans; }).finally(() => lgAsking.delete(k)));
   const mine = () => view === "lineage" && LS.get("lineage.album") && lgKey(LS.get("lineage.album")) === k;
   lgAsking.get(k).then(ans => { if (mine()){ lgDraw({ seed, answer: ans }); lgCovers(seed, ans); } }, e => {
-    if (e.kind === "key"){ LS.del("claude.key"); if (mine()) claudeSetup(e.message); }
+    if (e.kind === "key"){ LS.del("gemini.key"); if (mine()) aiSetup(e.message); }
     if (mine()) lgDraw({ seed, answer: old, error: e.message });
   });
 }
-// covers come from Deezer once, are kept with Claude's answer, and fade in where the album already sits
+// covers come from Deezer once, are kept with Gemini's answer, and fade in where the album already sits
 function lgCovers(seed, answer){
   const todo = [];
   for (const list of ["later", "earlier", "same"]) answer[list].forEach((r, i) => { if (!r.looked) todo.push([list, i, r]); });
@@ -1181,9 +1213,9 @@ function lgCovers(seed, answer){
     im.src = c.src; box.appendChild(im);
   }))).then(() => { const all = LS.get(LG_SAVED, {}); if (all[lgKey(seed)]) lgPut(seed, answer); });
 }
-// an album Claude named, in the shape a Wax record has, so the menu finds its Spotify version the same way
+// an album Gemini named, in the shape a Wax record has, so the menu finds its Spotify version the same way
 function lineageItem(list, i){
-  const r = lgState?.answer?.[list]?.[i];
+  const r = list === "links" ? lgState?.links?.[i] : lgState?.answer?.[list]?.[i];
   return r && { id: "lg:" + resultKey(r.name, r.artist), wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src, url: r.url, title: r.name + " · " + r.artist };
 }
 // the wheel over the middle row moves it sideways first, then carries on up or down the page at either end
@@ -1196,19 +1228,19 @@ $("#lineage").addEventListener("wheel", e => {
   e.preventDefault();
   row.scrollLeft += d;
 }, { passive: false });
-function claudeSetup(msg){
-  $("#claudeSetup").classList.remove("hidden"); $("#claudeMsg").textContent = msg || ""; $("#claudeKey").value = "";
-  $("#claudeKey").focus();
+function aiSetup(msg){
+  $("#aiSetup").classList.remove("hidden"); $("#aiMsg").textContent = msg || ""; $("#aiKey").value = "";
+  $("#aiKey").focus();
 }
-$("#claudeForm").onsubmit = e => {
+$("#aiForm").onsubmit = e => {
   e.preventDefault();
-  const k = $("#claudeKey").value.trim();
+  const k = $("#aiKey").value.trim();
   if (!k) return;
-  LS.set("claude.key", k); $("#claudeSetup").classList.add("hidden");
+  LS.set("gemini.key", k); $("#aiSetup").classList.add("hidden");
   if (view === "lineage") renderLineage();
 };
-$("#claudeSetup").addEventListener("click", e => { if (e.target.id === "claudeSetup") e.target.classList.add("hidden"); });
-addEventListener("keydown", e => { if (e.key === "Escape") $("#claudeSetup").classList.add("hidden"); });
+$("#aiSetup").addEventListener("click", e => { if (e.target.id === "aiSetup") e.target.classList.add("hidden"); });
+addEventListener("keydown", e => { if (e.key === "Escape") $("#aiSetup").classList.add("hidden"); });
 
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod", "discover", "lineage"].includes(LS.get("view")) ? LS.get("view") : "wall";
@@ -1225,7 +1257,7 @@ function setView(v){
   document.body.classList.toggle("ipod-view", v === "ipod");
   if (v === "queue"){ renderQueue(); if (matchMedia("(pointer: fine)").matches) $("#qsearch").focus({ preventScroll: true }); }
   if (v === "wax") renderWax(); else $("#waxSetup").classList.add("hidden");
-  if (v !== "lineage") $("#claudeSetup").classList.add("hidden");
+  if (v !== "lineage"){ $("#aiSetup").classList.add("hidden"); lgLinked = false; }
   document.body.classList.toggle("decade-view", v === "decades");
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades"){ centerNext = true; renderDecades(); }
