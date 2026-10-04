@@ -232,15 +232,39 @@ const IPod = window.IPod = {
     fit();
     // the lists are built once from the finished album list, so nothing moves while you look
     if (built !== opts.albums){
-      built = opts.albums; albums = (opts.albums || []).filter(a => a && a.id);
+      built = opts.albums; albums = (opts.albums || []).filter(a => a && a.id && !(opts.hidden && opts.hidden(a)));
       for (const k of Object.keys(stacks)) delete stacks[k];
       pagesEl().replaceChildren();
     }
     if (stacks.playlists && stacks.playlists.length === 1) fillPlaylists(stacks.playlists[0].el);
     setTab(tab);
-  }
+  },
+  // take an album off the iPod where it stands, without rebuilding the lists or losing your place
+  drop(album){
+    const id = album.id, gone = x => x === album || x.id === id;
+    albums = albums.filter(x => !gone(x));
+    for (const [k, st] of Object.entries(stacks)){
+      for (let i = st.length - 1; i > 0; i--){
+        if (st[i].el._album !== id) continue;
+        if (k === tab && i === st.length - 1) pop();
+        else { st[i].el.remove(); st.splice(i, 1); }
+      }
+      for (const p of st){
+        if (p.el._albums) p.el._albums = p.el._albums.filter(x => !gone(x));
+        for (const row of p.el.querySelectorAll(`.ip-row[data-album="${CSS.escape(id)}"]`)) row.remove();
+        for (const row of p.el.querySelectorAll(".ip-row[data-artist]"))
+          if (!albums.some(a => a.artist === row.dataset.artist)) row.remove();
+        // a letter with nothing left under it goes too
+        for (const sec of p.el.querySelectorAll(".ip-sec"))
+          if (!sec.nextElementSibling || !sec.nextElementSibling.classList.contains("ip-row")) sec.remove();
+      }
+    }
+    if (stacks[tab]) bar();
+  },
+  // the album list has changed (an album was put back): build afresh next time the iPod opens
+  reset(){ built = null; }
 };
-function openAlbum(a){ push(nameOf(a), IPod.albumPage(a)); }
+function openAlbum(a){ const el = IPod.albumPage(a); el._album = a.id; push(nameOf(a), el); }
 function wire(el){
   el.addEventListener("click", e => {
     if (dragged) return;
