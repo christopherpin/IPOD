@@ -188,6 +188,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="queue">Add To Queue</button>
   <button data-act="ipodout">Remove From iPod</button>
   <button data-act="ipodin">Add To iPod</button>
+  <button data-act="decades">View In Decades</button>
 </div>
 <div class="menu hidden" id="dmenu">
   <button data-act="expand">Expand Decade</button>
@@ -198,6 +199,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="spotify">Queue On Spotify</button>
   <button data-act="first">Move To Front</button>
   <button data-act="remove">Remove From Queue</button>
+  <button data-act="decades">View In Decades</button>
 </div>
 <nav class="views hidden" id="views">
   <button data-view="queue" data-label="Queue">Queue</button>
@@ -825,6 +827,7 @@ $("#qbody").addEventListener("contextmenu", e => {
   const it = queueList().find(x => x.key === qmenuFor), sb = qmenu.querySelector('[data-act="spotify"]');
   sb.classList.toggle("hidden", !spotifyAlbumId(it));
   sb.disabled = false; sb.textContent = "Queue On Spotify";
+  qmenu.querySelector('[data-act="decades"]').classList.toggle("hidden", !inDecades(it));
   qmenu.classList.remove("hidden");
   qmenu.style.left = Math.min(e.clientX, innerWidth - qmenu.offsetWidth - 4) + "px";
   qmenu.style.top = Math.min(e.clientY, innerHeight - qmenu.offsetHeight - 4) + "px";
@@ -834,6 +837,7 @@ qmenu.onclick = e => {
   if (!act || !key) return;
   if (act === "spotify"){ queueOnSpotify(e.target.closest("button"), key); return; }
   if (act === "discover"){ closeQmenu(); discover(queueList().find(x => x.key === key)); return; }
+  if (act === "decades"){ closeQmenu(); viewInDecades(queueList().find(x => x.key === key)); return; }
   closeQmenu();
   const list = queueList(), it = list.find(x => x.key === key), rest = list.filter(x => x.key !== key);
   LS.set(QUEUE, act === "first" ? [it, ...rest] : rest);
@@ -1306,7 +1310,19 @@ function renderDecades(anchor){
   const copies = 3 + Math.ceil(dec.clientWidth / setW);
   for (let i = 1; i < copies; i++) dec.appendChild(set());
   for (const c of dec.children){ const t = colTop[c.dataset.decade]; if (t){ expected.set(c, c.scrollTop = t); } }
-  if (anchor){
+  if (focusOn && groups.some(g => g.key === "y" + focusOn.year)){
+    // View In Decades: the album's year in the middle, and the album in the middle of its column
+    const a = focusOn, key = "y" + a.year;
+    focusOn = null; centerNext = false;
+    const c = dec.children[groups.length + groups.findIndex(g => g.key === key)];
+    dec.scrollLeft = c.offsetLeft + c.offsetWidth / 2 - dec.clientWidth / 2;
+    const tile = [...c.querySelectorAll(".tiles img")].find(t => a.ids.includes(t.dataset.id));
+    if (tile){
+      const top = Math.max(0, tile.offsetTop + tile.offsetHeight / 2 - (c.clientHeight + c.querySelector("h2").offsetHeight) / 2);
+      for (const o of dec.querySelectorAll(`.col[data-decade="${key}"]`)) expected.set(o, o.scrollTop = top);
+      colTop[key] = top;
+    }
+  } else if (anchor){
     const i = groups.findIndex(g => g.key === anchor.key), c = dec.children[groups.length + i];
     dec.scrollLeft = c.offsetLeft - anchor.x;
     shade();
@@ -1409,6 +1425,22 @@ addEventListener("wheel", closeDmenu, { passive: true });
 addEventListener("blur", closeDmenu);
 
 let sliding = false; // set while years slide out or back in
+// the album as it sits in Decades, if it's one of yours with a release year
+function inDecades(x){
+  if (!x) return null;
+  const ids = [x.id, LS.get("wax.spotify", {})[x.id]?.id, spotifyAlbumId(x)].filter(Boolean);
+  for (const id of ids){ const a = albums.find(al => al.ids.includes(id)); if (a && a.year) return a; }
+  return null;
+}
+// right-click View In Decades on any other tab: open Decades with that album's decade spread into years, album centred
+let focusOn = null;
+function viewInDecades(x){
+  const a = inDecades(x);
+  if (!a) return;
+  expanded = decadeOf(a);
+  focusOn = a;
+  if (view === "decades") renderDecades(); else setView("decades");
+}
 const screenX = el => el.getBoundingClientRect().left - dec.getBoundingClientRect().left;
 function expandDecade(d, col){
   cancelAnimationFrame(glide); glide = 0;
@@ -1515,6 +1547,7 @@ document.addEventListener("contextmenu", e => {
   qb.disabled = false; qb.classList.remove("hidden");
   qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue" : "Add To Queue";
   if (rec) spotifyFor(rec).catch(() => {});
+  menu.querySelector('[data-act="decades"]').classList.toggle("hidden", !!tile.closest("#decades") || !inDecades(album));
   placeMenu(e);
 });
 function placeMenu(e){
@@ -1533,6 +1566,7 @@ menu.onclick = e => {
     return;
   }
   if (act === "discover"){ closeMenu(); discover(album); return; }
+  if (act === "decades"){ closeMenu(); viewInDecades(album); return; }
   if (act === "pantheon" && album.wax){
     const btn = e.target.closest("button");
     if (btn.disabled) return;
