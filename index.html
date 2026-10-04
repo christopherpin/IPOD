@@ -1033,36 +1033,84 @@ function seedOf(a){
   const name = a.name || a.album || t || "", artist = (a.artist || rest.join(" · ")).split(", ")[0] || "";
   return { name: cleanTitle(name) || name, artist, year: a.year || null, src: a.src || "" };
 }
+// Every Discover and Family Tree is kept (blurbs and all), so opening an album again asks no other site.
+// Once it's old (Discover after a month, Family Tree after six), it's looked up again quietly in the
+// background and the update shows the next time that album is opened, never while you're looking at it.
+// A Discover update only adds: newly found albums join the end of their group, nothing is taken away.
+const SAVED = { discover: 30 * 864e5, lineage: 180 * 864e5 }, SAVED_MAX = 60;
+const savedKey = seed => resultKey(seed.name, seed.artist);
+const savedGet = (tab, seed) => LS.get(tab + ".saved", {})[savedKey(seed)] || null;
+function savedPut(tab, res){
+  const all = LS.get(tab + ".saved", {});
+  all[savedKey(res.seed)] = res;
+  for (const k of Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0)).slice(SAVED_MAX)) delete all[k];
+  LS.set(tab + ".saved", all);
+}
+const relooking = new Set();
+function refreshLater(tab, saved, look, merge){
+  const k = tab + savedKey(saved.seed);
+  if (Date.now() - (saved.at || 0) < SAVED[tab] || relooking.has(k)) return;
+  relooking.add(k);
+  look().then(fresh => { if (fresh) savedPut(tab, merge(savedGet(tab, saved.seed) || saved, fresh)); }).catch(() => {}).finally(() => relooking.delete(k));
+}
+function addRecs(old, fresh){
+  const k = r => resultKey(r.name, r.artist), have = new Set(old.recs.map(k)), now = Date.now();
+  const added = fresh.recs.filter(r => !have.has(k(r))).map(r => ({ ...r, added: now }));
+  const recs = ["sound", "fans", "link"].flatMap(kind => [...old.recs, ...added].filter(r => r.kind === kind));
+  return { ...old, recs, at: now };
+}
+const ownedSet = () => new Set(albums.map(x => resultKey(x.name || (x.title || "").split(" · ")[0], x.artist || "")));
+const findRecs = seed => { const have = ownedSet(); return Discover.find(seed, { owned: (n, ar) => have.has(resultKey(n, ar)) }); };
+
 // a new Discover replaces whatever was there; albums you already have are left out of the row
 async function discover(a){
   if (!a) return;
-  const seed = seedOf(a), run = ++dzRun;
+  const seed = seedOf(a), run = ++dzRun, saved = savedGet("discover", seed);
+  if (saved){
+    dzState = saved; LS.set("discover", saved);
+    setView("discover"); scrollTo(0, 0);
+    refreshLater("discover", saved, () => findRecs(seed).then(f => f.recs.length ? f : null), addRecs);
+    return;
+  }
   dzState = { seed, loading: true };
   setView("discover"); scrollTo(0, 0);
-  const have = new Set(albums.map(x => resultKey(x.name || (x.title || "").split(" · ")[0], x.artist || "")));
-  const res = await Discover.find(seed, { owned: (n, ar) => have.has(resultKey(n, ar)) }).catch(() => ({ seed, recs: [] }));
+  const res = await findRecs(seed).catch(() => ({ seed, recs: [] }));
   if (run !== dzRun) return;
-  dzState = res; if (res.recs.length) LS.set("discover", res);
+  dzState = res;
+  if (res.recs.length){ LS.set("discover", res); savedPut("discover", res); }
   if (view === "discover") renderDiscover();
 }
-function renderDiscover(){ Discover.render($("#discover"), dzState, { onPick: r => discover(r) }); }
+// albums you've since added to your library drop out of the row
+let dzShown = null;
+function renderDiscover(){
+  const have = ownedSet();
+  dzShown = dzState?.recs ? { ...dzState, recs: dzState.recs.filter(r => !have.has(resultKey(r.name, r.artist))) } : dzState;
+  Discover.render($("#discover"), dzShown, { onPick: r => discover(r) });
+}
 // an album in the row, in the shape a Wax record has, so the menu finds its Spotify version the same way
 function discoverItem(i){
-  const r = dzState?.recs?.[i];
+  const r = dzShown?.recs?.[i];
   return r && { id: "dz" + r.dz, wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src, url: r.url, title: r.name + " · " + r.artist };
 }
 
 /* ---------- family tree: an album with what led to it below and what it led to above (lineage.js) ---------- */
 let lgState = LS.get("lineage"), lgRun = 0;
+const hasTree = res => [...(res.before || []), ...(res.after || [])].some(g => g.length);
 async function familyTree(a){
   if (!a) return;
-  const seed = seedOf(a), run = ++lgRun;
+  const seed = seedOf(a), run = ++lgRun, saved = savedGet("lineage", seed);
+  if (saved){
+    lgState = saved; LS.set("lineage", saved);
+    setView("lineage");
+    refreshLater("lineage", saved, () => Lineage.find(seed).then(f => hasTree(f) ? f : null), (old, fresh) => fresh);
+    return;
+  }
   lgState = { seed, loading: true };
   setView("lineage");
   const res = await Lineage.find(seed).catch(() => ({ seed, before: [[], []], after: [[], []], lanes: [] }));
   if (run !== lgRun) return;
   lgState = res;
-  if ([...res.before, ...res.after].some(g => g.length)) LS.set("lineage", res);
+  if (hasTree(res)){ LS.set("lineage", res); savedPut("lineage", res); }
   if (view === "lineage") renderLineage();
 }
 // it always opens with the album in the middle of the screen: scroll up for later music, down for earlier
