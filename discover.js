@@ -95,7 +95,9 @@ const dzRelated = id => remember("dzrelated", String(id), 30, async () => {
 async function dzSeedAlbum(name, artist){
   const j = await deezer("/search/album?limit=10&q=" + encodeURIComponent(`artist:"${artist}" album:"${name}"`));
   const n = norm(name), a = norm(artist);
-  return (j?.data || []).find(x => norm(x.artist?.name) === a && (norm(x.title) === n || norm(x.title).startsWith(n))) || null;
+  // the album itself, never "Disc 2" or another edition when the plain one is there
+  const mine = (j?.data || []).filter(x => norm(x.artist?.name) === a);
+  return mine.find(x => norm(x.title) === n) || mine.find(x => norm(x.title).startsWith(n) && !/\b(disc|cd|bonus|deluxe|live|demo|remix)/i.test(x.title)) || null;
 }
 // an artist's most-loved album on Deezer: studio albums (or EPs) only, skipping ones you already have
 // an artist's studio albums and EPs, most-loved first (only what's needed is kept)
@@ -258,7 +260,7 @@ async function find(seed, opts = {}){
   const wikiAlbum = a => window.Wiki ? cap(Wiki.lookup({ name: a.name, artists: [{ name: a.artist }] }), 9000, null) : Promise.resolve(null);
 
   // 1. the album itself and its artist, everywhere at once
-  const [dzA, dzAlb, mbid, seedWiki] = await Promise.all([cap(dzArtist(A), 9000, null), cap(dzSeedAlbum(T, A), 9000, null), cap(mbArtist(A), 9000, null), wikiAlbum(seed)]);
+  const [dzA, mbid, seedWiki] = await Promise.all([cap(dzArtist(A), 9000, null), cap(mbArtist(A), 9000, null), wikiAlbum(seed)]);
   const [related, lb, links, prods, seedText] = await Promise.all([
     dzA ? cap(dzRelated(dzA.id), 9000, []).then(v => v || []) : [],
     mbid ? cap(listenBrainz(mbid), 9000, []) : [],
@@ -335,7 +337,7 @@ async function find(seed, opts = {}){
   const group = k => out.filter(r => r.kind === k).sort((a, b) => a.strength - b.strength).slice(0, k === "link" ? 6 : 8);
   const recs = [...group("sound"), ...group("fans"), ...group("link")].map(({ strength, ...r }) => r);
   log(`Discover ${T}${round ? " (refresh " + round + ")" : ""}: ${uniq.length} albums found, ${recs.length} shown`);
-  return { seed: { ...seed, big: dzAlb?.cover_xl || "", genres: seedGenres }, recs, at: Date.now() };
+  return { seed: { ...seed, genres: seedGenres }, recs, at: Date.now() };
 }
 
 // One short sentence saying why, picked from a few wordings by the artist's name, so it stays the
@@ -367,6 +369,8 @@ function reason(kind, v){
 }
 
 /* ---------- the page ---------- */
+// Spotify's 300px cover address -> its 640px version of the very same image
+const sharper = src => /i\.scdn\.co\/image\/ab67616d00001e02/.test(src || "") ? src.replace("ab67616d00001e02", "ab67616d0000b273") : null;
 const LABEL = { sound: "Sounds like it", fans: "Fans also play", link: "Connected" };
 function render(el, state, { onPick, onMore } = {}){
   const frag = document.createDocumentFragment();
@@ -379,9 +383,11 @@ function render(el, state, { onPick, onMore } = {}){
   const hero = document.createElement("section"); hero.className = "dz-hero";
   const art = document.createElement("div"); art.className = "dz-art";
   const img = new Image(); img.alt = ""; img.draggable = false;
-  if (s.src || s.big) img.src = s.src || s.big; else img.style.visibility = "hidden";
+  if (s.src) img.src = s.src; else img.style.visibility = "hidden";
   // a sharper cover takes over once it has fully loaded, in the same spot
-  if (s.big && s.src){ const hi = new Image(); hi.onload = () => { img.src = s.big; }; hi.src = s.big; }
+  // the same cover as in your library, in Spotify's larger size once that has loaded
+  const big = sharper(s.src);
+  if (big){ const hi = new Image(); hi.onload = () => { img.src = big; }; hi.src = big; }
   art.appendChild(img); hero.appendChild(art);
   const cap = document.createElement("div"); cap.className = "dz-cap";
   cap.append(Object.assign(document.createElement("div"), { className: "dz-name", textContent: s.name }),
