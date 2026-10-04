@@ -203,7 +203,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-3";
+const BUILD = "2026-10-04 wall-recent-4";
 const DEBUG = new URLSearchParams(location.search).has("debug");
 function dbg(...msg){
   if (!DEBUG) return;
@@ -492,7 +492,7 @@ const addRecent = (col, recent) => col.add((recent?.items || []).sort((a, b) => 
 // until one you already have turns up (older ones are kept anyway), so a visit asks Spotify for a handful
 // of pages instead of every page of your library, and Spotify doesn't start turning requests away.
 async function load(col, known = null, recent = null){
-  const recentP = recent ? Promise.resolve(recent) : safe("/me/player/recently-played?limit=50");
+  const recentP = recent || safe("/me/player/recently-played?limit=50"); // recent: an answer (or promise of one) already asked for
   const topsP = Promise.all(["short_term", "medium_term", "long_term"].flatMap(r => [
     safe(`/me/top/tracks?time_range=${r}&limit=50`),
     safe(`/me/top/tracks?time_range=${r}&limit=50&offset=49`)
@@ -1511,8 +1511,10 @@ $("#form").onsubmit = async e => {
     const wait = setTimeout(() => $("#loading").classList.remove("hidden"), 600);
     let signedOut = false, busy = false;
     const t0 = performance.now();
-    const recent = await Promise.race([
-      api("/me/player/recently-played?limit=50").catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; }),
+    // a late answer isn't wasted: it still goes into the quiet refresh below, ready for next visit
+    const recentP = api("/me/player/recently-played?limit=50").then(j => { if (performance.now() - t0 > 8000) dbg("recent plays arrived late, after", Math.round(performance.now() - t0), "ms; saved for next visit"); return j; })
+      .catch(e => { signedOut = e.status === 401; busy = e.status === 429; dbg("recent plays failed:", e.status || "", e.message); return null; });
+    const recent = await Promise.race([recentP,
       sleep(8000).then(() => { dbg("recent plays took too long, showing the saved wall"); return null; })]);
     clearTimeout(wait);
     if (recent) dbg("recent plays answered in", Math.round(performance.now() - t0), "ms");
@@ -1534,7 +1536,7 @@ $("#form").onsubmit = async e => {
     // if Spotify is already turning requests away, leave it alone this visit
     if (busy){ dbg("skipping the full refresh this visit so Spotify can cool down"); return; }
     const col = collector();
-    load(col, new Set(cached.flatMap(a => a.ids || [a.id])), recent).then(() => { if (col.list.length){ const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("full refresh saved for next time:", all.length, "albums"); } })
+    load(col, new Set(cached.flatMap(a => a.ids || [a.id])), recentP).then(() => { if (col.list.length){ const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("full refresh saved for next time:", all.length, "albums"); } })
       .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
     return;
   }
