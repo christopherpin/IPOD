@@ -220,7 +220,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-8";
+const BUILD = "2026-10-04 wall-recent-9";
 // Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
 // On every visit the page quietly fetches the newest copy; if it differs from what's running, the
 // browser stores it and the page reloads itself once, before anything is drawn.
@@ -533,6 +533,21 @@ async function pool(items, n, fn){
   const out = new Array(items.length); let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length){ const k = i++; out[k] = await fn(items[k]); } }));
   return out;
+}
+// Your plays since a moment in time, newest first. Spotify hands them out 50 at a time, so this asks for one page,
+// and only goes further back (at most 3 more pages) when you've played more than 50 tracks since then.
+async function playsSince(t){
+  const items = [];
+  let j = await api("/me/player/recently-played?limit=50"), pages = 1;
+  for (;;){
+    items.push(...(j?.items || []));
+    const oldest = Math.min(...items.map(i => Date.parse(i.played_at) || 0));
+    const before = j?.cursors?.before;
+    if (!t || !before || !j.items?.length || oldest <= t || pages >= 4) break;
+    j = await api("/me/player/recently-played?limit=50&before=" + before); pages++;
+  }
+  if (pages > 1) dbg("recent plays took", pages, "pages to reach your last visit");
+  return { items };
 }
 const addRecent = (col, recent) => col.add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
 // known: album ids already saved on this device. Then only the newest saved albums are fetched, page by page,
@@ -1671,12 +1686,14 @@ $("#form").onsubmit = async e => {
     if (DEBUG){
       const tk = LS.get("token", {}), when = ms => ms ? new Date(ms).toLocaleString() : "never";
       dbg("sign-in good until", when(tk.exp), "· has recent-plays permission:", (tk.scope || "").includes("user-read-recently-played") ? "yes" : "no (" + (tk.scope || "none recorded") + ")");
-      dbg("newest play seen:", when(LS.get("playedSince", 0)), "· daily check:", when(LS.get("fullAt", 0)), "· resting until:", when(cool.until));
+      dbg("newest play seen:", when(LS.get("playedSince", 0)), "· last asked:", when(LS.get("checkedAt", 0)), "· resting until:", when(cool.until));
       dbg("earlier Spotify calls:\n  " + (LS.get("spotifyLog", []).slice(-20).map(c => new Date(c.t).toLocaleString() + "  " + c.p + "  → " + c.s + (c.ra ? " (retry after " + c.ra + "s)" : "") + "  " + c.ms + "ms").join("\n  ") || "none recorded yet"));
       dbg("?debug asks Spotify once now, even while resting");
     }
-    if (Date.now() < cool.until && !DEBUG){
-      dbg("giving Spotify a rest until", new Date(cool.until).toLocaleTimeString(), "· showing the saved wall");
+    // Reloading again within a couple of minutes has nothing new to find: show the saved wall without asking.
+    const fresh = Date.now() - LS.get("checkedAt", 0) < 2 * 60e3;
+    if ((Date.now() < cool.until || fresh) && !DEBUG){
+      dbg(fresh ? "asked Spotify less than 2 minutes ago · showing the saved wall" : "giving Spotify a rest until " + new Date(cool.until).toLocaleTimeString() + " · showing the saved wall");
       clearTimeout(wait);
       if (await outdated()) return;
       albums = cached; ready(); return;
@@ -1685,7 +1702,7 @@ $("#form").onsubmit = async e => {
     // a late answer isn't wasted: it still goes into the quiet refresh below, ready for next visit
     // Only ask for plays since the last one we saw (with a 5-hour buffer); everything older is already saved.
     const since = LS.get("playedSince", 0);
-    const recentP = api("/me/player/recently-played?limit=50" + (since ? "&after=" + (since - 5 * 3600e3) : "")).then(j => {
+    const recentP = playsSince(since ? since - 5 * 3600e3 : 0).then(j => {
         const newest = Math.max(0, ...(j?.items || []).map(i => Date.parse(i.played_at) || 0));
         if (newest > since) LS.set("playedSince", newest);
         if (performance.now() - t0 > 8000 && j?.items?.length){
@@ -1703,7 +1720,7 @@ $("#form").onsubmit = async e => {
           if (c.fromSpotify && c.until > Date.now()) dbg("Spotify says come back at", new Date(c.until).toLocaleString());
           else { const mins = Math.min(120, (cool.mins || 5) * 2); LS.set("cooldown", { until: Date.now() + mins * 60000, mins }); dbg("will wait", mins, "minutes before asking Spotify again"); }
         }
-        else if (j) LS.del("cooldown");
+        else if (j){ LS.del("cooldown"); LS.set("checkedAt", Date.now()); }
         return j;
       });
     const recent = await Promise.race([recentP,
@@ -1725,14 +1742,7 @@ $("#form").onsubmit = async e => {
     } else if (recent) dbg("Spotify returned no recent plays");
     dbg("top left now:", albums[0]?.title);
     ready();
-    // then fetch the full list (top tracks, saved albums) quietly for next time, so nothing moves now
-    // if Spotify is already turning requests away, leave it alone this visit
-    if (busy){ dbg("skipping the full refresh this visit so Spotify can cool down"); return; }
-    // Top tracks and newly saved albums change slowly: look at those at most once a day.
-    if (Date.now() - LS.get("fullAt", 0) < 24 * 3600e3){ dbg("top tracks and saved albums were checked today; only recent plays asked for"); return; }
-    const col = collector();
-    load(col, new Set(cached.flatMap(a => a.ids || [a.id])), recentP).then(() => { if (col.list.length){ LS.set("fullAt", Date.now()); const all = mergeLibrary(col.list, LS.get(CACHE)); if (LS.set(CACHE, all)) dbg("daily refresh saved for next time:", all.length, "albums"); } })
-      .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
+    // Nothing else is asked for: everything older is already saved, so later visits only reshuffle by what you've played.
     return;
   }
   try {
