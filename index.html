@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
 <link rel="stylesheet" href="ipod.css">
+<link rel="stylesheet" href="discover.css">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -158,7 +159,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <div id="qbody"></div>
 </main>
 <main class="ipod hidden" id="ipod"></main>
-<main class="hidden" id="discover"></main>
+<main class="dz hidden" id="discover"></main>
 <main class="hidden" id="lineage"></main>
 <button class="sharebtn hidden" id="shareBtn">Share</button>
 <div class="sharebox hidden" id="shareBox"></div>
@@ -180,6 +181,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   </form>
 </div>
 <div class="menu hidden" id="menu">
+  <button data-act="discover">Discover</button>
   <button data-act="top">Send To Top 10</button>
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
@@ -192,6 +194,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="collapse">Collapse Decade</button>
 </div>
 <div class="menu hidden" id="qmenu">
+  <button data-act="discover">Discover</button>
   <button data-act="spotify">Queue On Spotify</button>
   <button data-act="first">Move To Front</button>
   <button data-act="remove">Remove From Queue</button>
@@ -211,6 +214,8 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </nav>
 
 <script src="ipod.js"></script>
+<script src="wiki.js"></script>
+<script src="discover.js"></script>
 <script>
 "use strict";
 const LS = {
@@ -828,6 +833,7 @@ qmenu.onclick = e => {
   const act = e.target.closest("button")?.dataset.act, key = qmenuFor;
   if (!act || !key) return;
   if (act === "spotify"){ queueOnSpotify(e.target.closest("button"), key); return; }
+  if (act === "discover"){ closeQmenu(); discover(queueList().find(x => x.key === key)); return; }
   closeQmenu();
   const list = queueList(), it = list.find(x => x.key === key), rest = list.filter(x => x.key !== key);
   LS.set(QUEUE, act === "first" ? [it, ...rest] : rest);
@@ -1010,6 +1016,32 @@ function placeSearch(){
 }
 addEventListener("resize", () => placeSearch());
 
+/* ---------- discover: one album and the music related to it (discover.js does the looking) ---------- */
+let dzState = LS.get("discover"), dzRun = 0;
+function seedOf(a){
+  const [t, ...rest] = (a.title || "").split(" · ");
+  const name = a.name || a.album || t || "", artist = (a.artist || rest.join(" · ")).split(", ")[0] || "";
+  return { name: cleanTitle(name) || name, artist, year: a.year || null, src: a.src || "" };
+}
+// a new Discover replaces whatever was there; albums you already have are left out of the row
+async function discover(a){
+  if (!a) return;
+  const seed = seedOf(a), run = ++dzRun;
+  dzState = { seed, loading: true };
+  setView("discover"); scrollTo(0, 0);
+  const have = new Set(albums.map(x => resultKey(x.name || (x.title || "").split(" · ")[0], x.artist || "")));
+  const res = await Discover.find(seed, { owned: (n, ar) => have.has(resultKey(n, ar)) }).catch(() => ({ seed, recs: [] }));
+  if (run !== dzRun) return;
+  dzState = res; if (res.recs.length) LS.set("discover", res);
+  if (view === "discover") renderDiscover();
+}
+function renderDiscover(){ Discover.render($("#discover"), dzState, { onPick: r => discover(r) }); }
+// an album in the row, in the shape a Wax record has, so the menu finds its Spotify version the same way
+function discoverItem(i){
+  const r = dzState?.recs?.[i];
+  return r && { id: "dz" + r.dz, wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src, url: r.url, title: r.name + " · " + r.artist };
+}
+
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod", "discover", "lineage"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
@@ -1029,6 +1061,7 @@ function setView(v){
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("on", b.dataset.view === v);
   if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
+  if (v === "discover") renderDiscover();
   $("#wallNone").classList.toggle("hidden", !(v === "wall" && wallFilter && !albums.some(a => wallFilter.has(a.id))));
   placeSearch();
 }
@@ -1454,16 +1487,18 @@ document.addEventListener("contextmenu", e => {
     for (const b of menu.querySelectorAll("button")) b.classList.toggle("hidden", b.dataset.act !== "ipodout");
     return placeMenu(e);
   }
-  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id]");
+  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id], #discover .dz-tile");
   if (!tile) return;
   e.preventDefault();
   if (drag) return;
   // a Wax record stands in for its Spotify version, which is looked up straight away
-  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id);
+  // so does an album in Discover's row
+  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i);
   if (rec) rec.wax = true;
   const album = rec || (tile.closest("#pantheon, #ipod") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
   if (!album) return;
   menuFor = album;
+  menu.querySelector('[data-act="discover"]').classList.remove("hidden");
   const d = rec ? null : decadeOf(album);
   menu.querySelector('[data-act="top"]').classList.toggle("hidden", !d);
   // the iPod has no ranking to send things to the end of; it can drop an album instead, and the Wall can put it back
@@ -1496,6 +1531,7 @@ menu.onclick = e => {
     for (const a of albums) if (a.artist === album.ipodArtist && !offIpod(a)) setOnIpod(a, false);
     return;
   }
+  if (act === "discover"){ closeMenu(); discover(album); return; }
   if (act === "pantheon" && album.wax){
     const btn = e.target.closest("button");
     if (btn.disabled) return;
