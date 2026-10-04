@@ -109,7 +109,6 @@ body.decade-view{overflow:hidden}
 .wsearch input{width:100%;font:inherit;font-size:14px;color:var(--text);background:rgba(22,22,24,.92);border:1px solid #2a2a2e;border-radius:999px;padding:9px 16px;outline:none;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 .wsearch input:focus{border-color:var(--rank)}
 .wsearch input::placeholder{color:var(--muted)}
-.wsearch.busy input{color:var(--muted)}
 .empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted)}
 /* queue: albums you want to hear, found with one search bar that looks beyond Spotify */
 .queue{padding:0 4px 72px}
@@ -231,7 +230,7 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-9";
+const BUILD = "2026-10-04 wall-search-artist";
 // Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
 // On every visit the page quietly fetches the newest copy; if it differs from what's running, the
 // browser stores it and the page reloads itself once, before anything is drawn.
@@ -961,8 +960,8 @@ async function findOnSpotify(rec){
   return null;
 }
 
-/* ---------- wall search: band, song, genre, decade (2020s) or year (2020) ---------- */
-// Everything is worked out first, then the wall is redrawn once with only the albums that match.
+/* ---------- wall search: artist, decade (2020s) or year (2020) ---------- */
+// Worked out from the saved albums alone (no Spotify calls), then the wall is redrawn once with only the matches.
 let searchRun = 0;
 async function searchWall(q){
   const run = ++searchRun;
@@ -977,23 +976,7 @@ async function searchWall(q){
     keep = a => a.year === +yr[1];
   } else {
     const n = norm(q);
-    $("#wsearch").classList.add("busy");
-    // band or album title: from what's already here
-    const ids = new Set(albums.filter(a => norm(a.artist || "").includes(n) || norm(a.title || "").includes(n)).map(a => a.id));
-    const byKey = new Map(albums.map(a => [norm(cleanTitle(a.name || (a.title || "").split(" · ")[0])) + "|" + norm(a.artist || ""), a]));
-    const find = al => al && (albums.find(a => a.ids.includes(al.id)) || byKey.get(norm(cleanTitle(al.name || "")) + "|" + norm((al.artists || [])[0]?.name || "")));
-    const enc = encodeURIComponent;
-    // song names and genres: ask Spotify (a few small pages each), then keep the albums you have
-    const [tracks, artists] = await Promise.all([
-      Promise.all([0, 10, 20].map(o => safe(`/search?type=track&limit=10&offset=${o}&q=${enc(q)}`).catch(() => null))),
-      Promise.all([0, 10, 20].map(o => safe(`/search?type=artist&limit=10&offset=${o}&q=${enc(`genre:"${q}"`)}`).catch(() => null)))
-    ]);
-    if (run !== searchRun) return;
-    for (const t of tracks.flatMap(p => p?.tracks?.items || [])) if (t && norm(t.name || "").includes(n)){ const a = find(t.album); if (a) ids.add(a.id); }
-    const genreArtists = new Set(artists.flatMap(p => p?.artists?.items || []).filter(Boolean).map(x => norm(x.name || "")));
-    for (const a of albums) if (genreArtists.has(norm(a.artist || ""))) ids.add(a.id);
-    $("#wsearch").classList.remove("busy");
-    keep = a => ids.has(a.id);
+    keep = a => norm(a.artist || "").includes(n);
   }
   if (run !== searchRun) return;
   wallFilter = new Set(albums.filter(keep).map(a => a.id));
