@@ -57,10 +57,12 @@ body.phone .pantheon,body.phone .queue{padding-bottom:calc(var(--dock) + 8px)}
 body.phone .decades,body.phone .ipod{bottom:var(--dock)}
 body.phone .ipod{padding-bottom:0}
 body.phone .tiles{padding-bottom:4px}
-body.phone .views button{padding:0 3px;font-size:11px;border-radius:8px}
-body.phone .views button::after,body.phone .views button.on{font-size:13px}
-body.phone .views button.hub{font-size:14px}
-body.phone .views button.hub::after,body.phone .views button.hub.on{font-size:16px}
+/* eight tabs share a phone's width, so the labels shrink a little on narrow screens to keep them on one line */
+body.phone .views{--u:min(1px,.22vw)}
+body.phone .views button{padding:0 2px;font-size:calc(11 * var(--u));border-radius:8px}
+body.phone .views button::after,body.phone .views button.on{font-size:calc(13 * var(--u))}
+body.phone .views button.hub{font-size:calc(14 * var(--u))}
+body.phone .views button.hub::after,body.phone .views button.hub.on{font-size:calc(16 * var(--u))}
 
 /* decades: one column per decade, loops left/right, each column scrolls on its own */
 body.decade-view{overflow:hidden}
@@ -152,6 +154,8 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <div id="qbody"></div>
 </main>
 <main class="ipod hidden" id="ipod"></main>
+<main class="hidden" id="discover"></main>
+<main class="hidden" id="lineage"></main>
 <button class="sharebtn hidden" id="shareBtn">Share</button>
 <div class="sharebox hidden" id="shareBox"></div>
 <div class="setup hidden" id="shareSetup">
@@ -185,12 +189,14 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="remove">Remove From Queue</button>
 </div>
 <nav class="views hidden" id="views">
+  <button data-view="discover" data-label="Discover">Discover</button>
   <button data-view="queue" data-label="Queue">Queue</button>
   <button data-view="decades" data-label="Decades">Decades</button>
   <button data-view="ipod" data-label="iPod" class="hub">iPod</button>
   <button data-view="wall" data-label="Wall">Wall</button>
   <button data-view="wax" data-label="Wax">Wax</button>
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
+  <button data-view="lineage" data-label="Lineage">Lineage</button>
 </nav>
 
 <script src="ipod.js"></script>
@@ -963,7 +969,7 @@ function placeSearch(){
 addEventListener("resize", () => placeSearch());
 
 /* ---------- views ---------- */
-let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod"].includes(LS.get("view")) ? LS.get("view") : "wall";
+let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod", "discover", "lineage"].includes(LS.get("view")) ? LS.get("view") : "wall";
 function setView(v){
   view = v; LS.set("view", v);
   $("#wall").classList.toggle("hidden", v !== "wall");
@@ -971,6 +977,8 @@ function setView(v){
   $("#pantheon").classList.toggle("hidden", v !== "pantheon");
   $("#wax").classList.toggle("hidden", v !== "wax");
   $("#queue").classList.toggle("hidden", v !== "queue");
+  $("#discover").classList.toggle("hidden", v !== "discover");
+  $("#lineage").classList.toggle("hidden", v !== "lineage");
   if (v === "ipod") showIpod(); else $("#ipod").classList.add("hidden");
   document.body.classList.toggle("ipod-view", v === "ipod");
   if (v === "queue"){ renderQueue(); if (matchMedia("(pointer: fine)").matches) $("#qsearch").focus({ preventScroll: true }); }
