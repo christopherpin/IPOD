@@ -135,6 +135,13 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 .sharebox a{display:block;margin-top:4px;color:var(--rank);text-decoration:none}
 #shareSetup{z-index:25;background:rgba(11,11,12,.94)}
 #shareSetup a{color:var(--rank)}
+/* lineage: for now, just the one album sent there, sitting in the middle */
+.lgone{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px}
+.lgone img{display:block;width:clamp(180px,40vh,380px);aspect-ratio:1;object-fit:cover;background:var(--tile);box-shadow:0 24px 60px rgba(0,0,0,.55)}
+.lgone .name{font:700 22px/1.2 "Helvetica Neue",Helvetica,Arial,sans-serif;text-align:center}
+.lgone .sub{color:var(--muted);font-size:13px;text-align:center}
+.lgone p{margin:0;color:var(--muted)}
+body.dock-top .lgone{top:var(--dock)} body.dock-left .lgone{left:var(--dock)} body.dock-right .lgone{right:var(--dock)} body.phone .lgone{bottom:var(--dock)}
 </style>
 </head>
 <body>
@@ -159,7 +166,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </main>
 <main class="ipod hidden" id="ipod"></main>
 <main class="dz hidden" id="discover"></main>
-<main class="hidden" id="lineage"></main>
+<main class="lgone hidden" id="lineage"></main>
 <button class="sharebtn hidden" id="shareBtn">Share</button>
 <div class="sharebox hidden" id="shareBox"></div>
 <div class="setup hidden" id="shareSetup">
@@ -181,6 +188,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </div>
 <div class="menu hidden" id="menu">
   <button data-act="discover">Discover</button>
+  <button data-act="lineage">Send To Lineage</button>
   <button data-act="top">Send To Top 10</button>
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
@@ -195,6 +203,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </div>
 <div class="menu hidden" id="qmenu">
   <button data-act="discover">Discover</button>
+  <button data-act="lineage">Send To Lineage</button>
   <button data-act="spotify">Queue On Spotify</button>
   <button data-act="first">Move To Front</button>
   <button data-act="remove">Remove From Queue</button>
@@ -838,6 +847,7 @@ qmenu.onclick = e => {
   if (!act || !key) return;
   if (act === "spotify"){ queueOnSpotify(e.target.closest("button"), key); return; }
   if (act === "discover"){ closeQmenu(); discover(queueList().find(x => x.key === key)); return; }
+  if (act === "lineage"){ closeQmenu(); toLineage(queueList().find(x => x.key === key)); return; }
   if (act === "decades"){ closeQmenu(); viewInDecades(queueList().find(x => x.key === key)); return; }
   closeQmenu();
   const list = queueList(), it = list.find(x => x.key === key), rest = list.filter(x => x.key !== key);
@@ -1098,8 +1108,24 @@ function discoverItem(i){
   return r && { id: "dz" + r.dz, wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src, url: r.url, title: r.name + " · " + r.artist };
 }
 
-// Family Tree was taken out (Lineage is an empty tab for now): forget what it had saved
+// Family Tree was taken out: forget what it had saved
 LS.del("lineage"); LS.del("lineage.saved");
+/* ---------- lineage: Send To Lineage puts one album here, and it just sits there ---------- */
+function toLineage(a){
+  if (!a) return;
+  LS.set("lineage.album", seedOf(a));
+  setView("lineage");
+}
+function renderLineage(){
+  const el = $("#lineage"), a = LS.get("lineage.album");
+  if (!a){ el.replaceChildren(Object.assign(document.createElement("p"), { textContent: "Right-click any album and choose Send To Lineage." })); return; }
+  const img = new Image(); img.alt = ""; img.draggable = false;
+  if (a.src) img.src = a.src; else img.style.visibility = "hidden";
+  const big = (a.src || "").includes("ab67616d00001e02") ? a.src.replace("ab67616d00001e02", "ab67616d0000b273") : null;
+  if (big){ const hi = new Image(); hi.onload = () => { img.src = big; }; hi.src = big; }
+  el.replaceChildren(img, Object.assign(document.createElement("div"), { className: "name", textContent: a.name }),
+    Object.assign(document.createElement("div"), { className: "sub", textContent: [a.artist, a.year].filter(Boolean).join(" · ") }));
+}
 
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod", "discover", "lineage"].includes(LS.get("view")) ? LS.get("view") : "wall";
@@ -1121,6 +1147,7 @@ function setView(v){
   if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
   if (v === "discover") renderDiscover();
+  if (v === "lineage") renderLineage();
   $("#wallNone").classList.toggle("hidden", !(v === "wall" && wallFilter && !albums.some(a => wallFilter.has(a.id))));
   placeSearch();
 }
@@ -1587,6 +1614,7 @@ document.addEventListener("contextmenu", e => {
   if (!album) return;
   menuFor = album;
   menu.querySelector('[data-act="discover"]').classList.remove("hidden");
+  menu.querySelector('[data-act="lineage"]').classList.remove("hidden");
   const d = rec ? null : decadeOf(album);
   menu.querySelector('[data-act="top"]').classList.toggle("hidden", !d);
   // the iPod has no ranking to send things to the end of; it can drop an album instead, and the Wall can put it back
@@ -1621,6 +1649,7 @@ menu.onclick = e => {
     return;
   }
   if (act === "discover"){ closeMenu(); discover(album); return; }
+  if (act === "lineage"){ closeMenu(); toLineage(album); return; }
   if (act === "decades"){ closeMenu(); viewInDecades(album); return; }
   if (act === "pantheon" && album.wax){
     const btn = e.target.closest("button");
