@@ -436,7 +436,13 @@ function render(el, state, { onPick, onMore } = {}){
   el.replaceChildren(frag);
 }
 
-const Discover = { find, render,
+// an album's cover from Deezer, for Lineage (remembered, so each cover is looked up once)
+const cover = (name, artist) => remember("dzcover", norm(artist) + "|" + norm(name), 180, async () => {
+  const a = await dzSeedAlbum(name, artist);
+  return a ? { src: a.cover_big || a.cover_medium || "", dz: a.id, url: a.link || ("https://www.deezer.com/album/" + a.id) } : undefined;
+});
+
+const Discover = { find, render, cover,
   _test: { sentences, mentions, criticLine, outletOf, accolade, norm } };
 if (typeof window !== "undefined") window.Discover = Discover;
 })();
