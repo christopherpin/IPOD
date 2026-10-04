@@ -247,7 +247,6 @@ const criticLine = (sents, names) => sents.find(s => s.outlets.length && names.s
 const ACCOLADE = /pazz|best albums|greatest albums|albums of (the|all)|top \d+|ranked|named it|year-end|list of/i;
 const accolade = sents => sents.find(s => s.outlets.length && ACCOLADE.test(s.text) && s.text.length < 260) || null;
 const trim = (s, n = 230) => s.length > n ? s.slice(0, n).replace(/\s\S*$/, "") + "…" : s;
-const firstSentence = s => trim(((s || "").match(/^[\s\S]*?[.!?](?=\s|$)/) || [s || ""])[0], 200);
 
 /* ---------- putting it together ---------- */
 const list = xs => xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1];
@@ -272,20 +271,30 @@ async function find(seed, opts = {}){
   const artistArticle = links.find(l => l.article)?.article;
   const seedSents = seedText.concat(artistArticle ? await cap(criticSentences(decodeURIComponent(artistArticle.split("/wiki/")[1] || "").replace(/_/g, " ")), 9000, []) : []);
 
-  // 2. candidate artists, with what each source says about them
+  // 2. candidate artists, with what each source says about them. A refresh (round 1, 2, ...) skips every
+  //    artist already shown and reaches one step further: the artists Deezer puts next to the closest ones.
+  const round = opts.round || 0, exclude = new Set([...(opts.exclude || [])].map(norm));
   const cands = new Map();
-  const cand = name => { const k = norm(name); if (!k || k === norm(A)) return null; if (!cands.has(k)) cands.set(k, { name, src: {} }); return cands.get(k); };
-  related.slice(0, 20).forEach((a, i) => { const c = cand(a.name); if (c){ c.src.deezer = i + 1; c.dzId = a.id; } });
-  lb.slice(0, 20).forEach((a, i) => { const c = cand(a.name); if (c) c.src.lb = i + 1; });
+  const cand = name => { const k = norm(name); if (!k || k === norm(A) || exclude.has(k)) return null; if (!cands.has(k)) cands.set(k, { name, src: {} }); return cands.get(k); };
+  related.forEach((a, i) => { const c = cand(a.name); if (c){ c.src.deezer = i + 1; c.dzId = a.id; } });
+  lb.forEach((a, i) => { const c = cand(a.name); if (c) c.src.lb = i + 1; });
   for (const l of links){
     const c = cand(l.otherLabel);
     if (!c) continue;
     (c.src.links ||= []).push({ kind: l.kind, via: l.viaLabel });
   }
+  if (round > 0){
+    const hubs = related.slice((round - 1) * 4, (round - 1) * 4 + 6);
+    const second = await Promise.all(hubs.map(h => cap(dzRelated(h.id), 9000, []).then(v => (v || []).map(a => ({ ...a, via: h.name })))));
+    second.forEach(list => list.slice(0, 10).forEach((a, i) => {
+      const c = cand(a.name);
+      if (c && !c.src.deezer && !c.src.lb && !c.src.links && !c.src.via){ c.src.via = a.via; c.src.second = i + 1; c.dzId = a.id; }
+    }));
+  }
 
   // 3. each artist's best album (Deezer), and its Wikipedia article
   const pick = [...cands.values()]
-    .map(c => ({ c, score: (c.src.links ? 0 : 100) + Math.min(c.src.deezer || 99, c.src.lb || 99) }))
+    .map(c => ({ c, score: (c.src.links ? 0 : 100) + Math.min(c.src.deezer || 99, c.src.lb || 99, c.src.second ? 30 + c.src.second : 99) }))
     .sort((a, b) => a.score - b.score).slice(0, 18).map(x => x.c);
   const resolved = await Promise.all(pick.map(async c => {
     const id = c.dzId || (await dzArtist(c.name))?.id;
@@ -295,7 +304,7 @@ async function find(seed, opts = {}){
   }));
   // albums shaped by the same producer (straight from Wikidata, then found on Deezer)
   const prodRecs = await Promise.all(prods.filter(p => p.albLabel && p.perfLabel && !/^Q\d+$/.test(p.albLabel)).slice(0, 8).map(async p => {
-    if (owned(p.albLabel, p.perfLabel) || cands.has(norm(p.perfLabel))) return null;
+    if (owned(p.albLabel, p.perfLabel) || cands.has(norm(p.perfLabel)) || exclude.has(norm(p.perfLabel)) || norm(p.perfLabel) === norm(A)) return null;
     const al = await dzSeedAlbum(p.albLabel, p.perfLabel);
     return al ? { c: { name: p.perfLabel, src: { producer: p.viaLabel } }, rec: { ...dzRec(al, p.perfLabel), year: yearOf(p.date) || yearOf(al.release_date) } } : null;
   }));
@@ -307,7 +316,7 @@ async function find(seed, opts = {}){
     x.sents = x.wiki ? await cap(criticSentences(x.wiki.title), 9000, []) : [];
   }));
 
-  // 4. the reasons, from what was found
+  // 4. the reasons, from what was found: short, and not all worded the same way
   const seedGenres = (seedWiki?.genres || []).map(g => g.trim()).filter(Boolean);
   const out = [];
   for (const x of uniq){
@@ -315,42 +324,51 @@ async function find(seed, opts = {}){
     const shared = seedGenres.filter(g => (wiki?.genres || []).some(h => norm(h) === norm(g)));
     // a critic tying the two together, in either album's article (or the artist's)
     const tie = criticLine(sents, [A, T]) || criticLine(seedSents, [B, rec.name]);
-    const why = [];
-    let kind;
     const link = (c.src.links || [])[0];
-    if (link || c.src.producer){
-      kind = "link";
-      if (c.src.producer) why.push(`${c.src.producer} produced both ${T} and ${rec.name}, according to Wikidata.`);
-      else if (link.kind === "influencedBy") why.push(`Wikidata lists ${B} as an influence on ${A}, with a cited source.`);
-      else if (link.kind === "influenced") why.push(`Wikidata lists ${A} as an influence on ${B}, with a cited source.`);
-      else if (link.kind === "memberOf") why.push(`${A} was a member of ${B}, according to Wikidata.`);
-      else why.push(`${link.via} has played in both ${A} and ${B}, according to Wikidata.`);
-    } else {
-      kind = shared.length ? "sound" : "fans";
-      if (shared.length) why.push(`Like ${T}, it's ${list(shared.slice(0, 2).map(lc))}, going by the genres Wikipedia lists for both albums.`);
-      if (c.src.deezer && c.src.lb) why.push(`Deezer lists ${B} as similar to ${A}, and ListenBrainz listeners often play the two in the same sitting.`);
-      else if (c.src.lb) why.push(`People who play ${A} on ListenBrainz often play ${B} in the same sitting.`);
-      else if (c.src.deezer) why.push(`Deezer lists ${B} among the artists most similar to ${A}.`);
-    }
-    if (tie) why.push(`Wikipedia, citing ${list(tie.outlets.slice(0, 2))}: “${trim(tie.text)}”`);
-    else {
-      const acc = accolade(sents);
-      if (acc) why.push(`Wikipedia, citing ${acc.outlets[0]}: “${trim(acc.text, 200)}”`);
-      else if (wiki?.summary) why.push(firstSentence(wiki.summary));
-      else why.push(`${rec.name} is their most-loved album on Deezer.`);
-    }
-    const strength = (tie ? -50 : 0) + (kind === "sound" ? -shared.length * 5 : 0) + Math.min(c.src.deezer || 40, c.src.lb || 40) - (c.src.deezer && c.src.lb ? 10 : 0);
+    const kind = link || c.src.producer ? "link" : shared.length ? "sound" : "fans";
+    const why = [reason(kind, { A, B, T, R: rec.name, g: list(shared.slice(0, 2).map(lc)), src: c.src, link })];
+    if (tie) why.push(`${tie.outlets[0]}, via Wikipedia: “${trim(tie.text, 100)}”`);
+    const strength = (tie ? -50 : 0) + (kind === "sound" ? -shared.length * 5 : 0) +
+      Math.min(c.src.deezer || 40, c.src.lb || 40, c.src.second ? 20 + c.src.second : 40) - (c.src.deezer && c.src.lb ? 10 : 0);
     out.push({ kind, ...rec, why: why.join(" "), critic: tie ? tie.outlets[0] : null, strength });
   }
   const group = k => out.filter(r => r.kind === k).sort((a, b) => a.strength - b.strength).slice(0, k === "link" ? 6 : 8);
   const recs = [...group("sound"), ...group("fans"), ...group("link")].map(({ strength, ...r }) => r);
-  log(`Discover ${T}: ${uniq.length} albums found, ${recs.length} shown`);
+  log(`Discover ${T}${round ? " (refresh " + round + ")" : ""}: ${uniq.length} albums found, ${recs.length} shown`);
   return { seed: { ...seed, big: dzAlb?.cover_xl || "", genres: seedGenres }, recs, at: Date.now() };
+}
+
+// One short sentence saying why, picked from a few wordings by the artist's name, so it stays the
+// same for the same album but neighbouring albums don't all read alike.
+const WORDS = {
+  soundBoth: ["{g} like {T}, and Deezer and ListenBrainz both tie {B} to {A}.", "Same {g} pull as {T}; listeners on Deezer and ListenBrainz pair them.", "{g} in the {A} mould, linked to them on Deezer and ListenBrainz."],
+  soundDeezer: ["Shares {T}'s {g}, and Deezer ranks {B} close to {A}.", "More {g}; Deezer files {B} right beside {A}.", "{g} like {T}. Deezer counts {B} among {A}'s nearest neighbours."],
+  soundLb: ["{g} like {T}, and {A} fans on ListenBrainz play it often.", "Built on the same {g} as {T}; ListenBrainz listeners pair the two.", "Another {g} record that {A} listeners keep reaching for."],
+  soundSecond: ["{g} like {T}, and a close neighbour of {via} on Deezer.", "Same {g} family; Deezer links {B} to {via}, a near relative of {A}."],
+  sound: ["{g}, just like {T}.", "Wikipedia files it under {g}, same as {T}."],
+  fansBoth: ["Deezer and ListenBrainz both place {B} near {A}.", "Listeners on Deezer and ListenBrainz alike pair {B} with {A}.", "A go-to next listen for {A} fans, by Deezer's and ListenBrainz's counts."],
+  fansDeezer: ["Deezer lists {B} among the artists closest to {A}.", "On Deezer, {B} sits right next to {A}.", "Deezer's listeners keep linking {B} with {A}."],
+  fansLb: ["ListenBrainz listeners who play {A} keep coming back to {B}.", "A frequent next listen for {A} fans, per ListenBrainz.", "{A} listeners on ListenBrainz often put on {B} in the same sitting."],
+  fansSecond: ["One step out: Deezer pairs {B} with {via}, a close relative of {A}.", "Deezer links {B} to {via}, who sits right beside {A}."],
+  influencedBy: ["{B} is a documented influence on {A} (Wikidata, cited).", "Where {A} came from: Wikidata lists {B} as an influence, with a source."],
+  influenced: ["{A} is a documented influence on {B} (Wikidata, cited).", "Carries {A}'s torch: Wikidata lists {A} as an influence on {B}, with a source."],
+  memberOf: ["{A} was a member of {B} (Wikidata).", "Shares people with {A}: {A} played in {B} (Wikidata)."],
+  member: ["{via} played in both {A} and {B} (Wikidata).", "Same hands: {via} is in {A} and {B} (Wikidata)."],
+  producer: ["{via} produced both {T} and {R} (Wikidata).", "Same producer as {T}: {via} (Wikidata)."]
+};
+function reason(kind, v){
+  const s = v.src, by = s.deezer && s.lb ? "Both" : s.deezer ? "Deezer" : s.lb ? "Lb" : s.second ? "Second" : "";
+  let key = kind === "link" ? (s.producer ? "producer" : v.link.kind) : kind + by;
+  if (!WORDS[key]) key = kind === "sound" ? "sound" : "fansDeezer";
+  const via = s.producer || s.via || v.link?.via || "";
+  const opts = WORDS[key], n = [...norm(v.B)].reduce((a, ch) => a + ch.charCodeAt(0), 0);
+  const text = opts[n % opts.length].replace(/\{(\w+)\}/g, (_, k) => ({ A: v.A, B: v.B, T: v.T, R: v.R, g: v.g, via })[k] ?? "");
+  return text[0].toUpperCase() + text.slice(1);
 }
 
 /* ---------- the page ---------- */
 const LABEL = { sound: "Sounds like it", fans: "Fans also play", link: "Connected" };
-function render(el, state, { onPick } = {}){
+function render(el, state, { onPick, onMore } = {}){
   const frag = document.createDocumentFragment();
   if (!state || !state.seed){
     const p = document.createElement("p"); p.className = "dz-empty";
@@ -368,6 +386,14 @@ function render(el, state, { onPick } = {}){
   const cap = document.createElement("div"); cap.className = "dz-cap";
   cap.append(Object.assign(document.createElement("div"), { className: "dz-name", textContent: s.name }),
     Object.assign(document.createElement("div"), { className: "dz-sub", textContent: [s.artist, s.year].filter(Boolean).join(" · ") }));
+  // a new batch of albums, none of them already shown for this album
+  if (onMore && !state.loading && state.recs && state.recs.length){
+    const more = document.createElement("button"); more.className = "dz-more"; more.type = "button";
+    more.textContent = state.busy ? "Finding new albums…" : state.exhausted ? "No new albums found" : "↻ Refresh";
+    more.disabled = !!state.busy;
+    more.onclick = () => onMore();
+    cap.appendChild(more);
+  }
   hero.appendChild(cap); frag.appendChild(hero);
 
   if (state.loading || !state.recs){
@@ -399,11 +425,6 @@ function render(el, state, { onPick } = {}){
       t.onclick = () => onPick && onPick(r);
       row.appendChild(t);
     });
-    // a mouse wheel scrolls the row sideways
-    row.addEventListener("wheel", e => {
-      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || row.scrollWidth <= row.clientWidth) return;
-      e.preventDefault(); row.scrollLeft += e.deltaY;
-    }, { passive: false });
     frag.appendChild(row);
   }
   el.replaceChildren(frag);
