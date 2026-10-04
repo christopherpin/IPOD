@@ -209,7 +209,21 @@ const LS = {
 };
 const $ = s => document.querySelector(s);
 /* ---------- ?debug: a small list of what the page fetched, shown only when the address ends in ?debug ---------- */
-const BUILD = "2026-10-04 wall-recent-4";
+const BUILD = "2026-10-04 wall-recent-5";
+// Browsers keep a copy of this page for a while, so a fix can take a long time to reach you.
+// On every visit the page quietly fetches the newest copy; if it differs from what's running, the
+// browser stores it and the page reloads itself once, before anything is drawn.
+const newestPage = fetch(location.href, { cache: "reload" }).then(r => r.ok ? r.text() : null).catch(() => null);
+async function outdated(){
+  const html = await Promise.race([newestPage, sleep(2500).then(() => null)]);
+  if (!html) return false;
+  const mine = [...document.querySelectorAll("script:not([src]), style")].map(e => e.textContent.trim());
+  if (mine.every(t => html.includes(t))){ try{ sessionStorage.removeItem("wall.reloaded"); }catch{} return false; }
+  try{ if (sessionStorage.getItem("wall.reloaded")) return false; sessionStorage.setItem("wall.reloaded", "1"); }catch{ return false; }
+  dbg("a newer version of the page is out, reloading");
+  location.reload();
+  return true;
+}
 const DEBUG = new URLSearchParams(location.search).has("debug");
 function dbg(...msg){
   if (!DEBUG) return;
@@ -1525,6 +1539,7 @@ $("#form").onsubmit = async e => {
     const recent = await Promise.race([recentP,
       sleep(8000).then(() => { dbg("recent plays took too long, showing the saved wall"); return null; })]);
     clearTimeout(wait);
+    if (await outdated()) return;
     if (recent) dbg("recent plays answered in", Math.round(performance.now() - t0), "ms");
     if (signedOut){
       // Spotify no longer accepts this sign-in: ask to connect again rather than quietly showing an old wall
@@ -1551,6 +1566,7 @@ $("#form").onsubmit = async e => {
   try {
     $("#loading").classList.remove("hidden");
     const col = collector(); await load(col);
+    if (await outdated()) return;
     albums = mergeLibrary(col.list, LS.get(CACHE)); LS.set(CACHE, albums); ready();
   }
   catch(e){ LS.del("token"); $("#wall").innerHTML = ""; dec.innerHTML = ""; $("#loading").classList.add("hidden"); albums = []; $("#views").classList.add("hidden"); $("#decades").classList.add("hidden"); document.body.classList.remove("decade-view"); showSetup(e.message); }
