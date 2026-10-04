@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
-<link rel="stylesheet" href="ipod.css?v=2026-10-04d">
-<link rel="stylesheet" href="discover.css?v=2026-10-04d">
-<link rel="stylesheet" href="lineage.css?v=2026-10-04d">
+<link rel="stylesheet" href="ipod.css?v=2026-10-04e">
+<link rel="stylesheet" href="discover.css?v=2026-10-04e">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -160,7 +159,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </main>
 <main class="ipod hidden" id="ipod"></main>
 <main class="dz hidden" id="discover"></main>
-<main class="lg hidden" id="lineage"></main>
+<main class="hidden" id="lineage"></main>
 <button class="sharebtn hidden" id="shareBtn">Share</button>
 <div class="sharebox hidden" id="shareBox"></div>
 <div class="setup hidden" id="shareSetup">
@@ -182,7 +181,6 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </div>
 <div class="menu hidden" id="menu">
   <button data-act="discover">Discover</button>
-  <button data-act="lineage">Send To Family Tree</button>
   <button data-act="top">Send To Top 10</button>
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
@@ -197,7 +195,6 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 </div>
 <div class="menu hidden" id="qmenu">
   <button data-act="discover">Discover</button>
-  <button data-act="lineage">Send To Family Tree</button>
   <button data-act="spotify">Queue On Spotify</button>
   <button data-act="first">Move To Front</button>
   <button data-act="remove">Remove From Queue</button>
@@ -217,10 +214,9 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
 </nav>
 
-<script src="ipod.js?v=2026-10-04d"></script>
-<script src="wiki.js?v=2026-10-04d"></script>
-<script src="discover.js?v=2026-10-04d"></script>
-<script src="lineage.js?v=2026-10-04d"></script>
+<script src="ipod.js?v=2026-10-04e"></script>
+<script src="wiki.js?v=2026-10-04e"></script>
+<script src="discover.js?v=2026-10-04e"></script>
 <script>
 "use strict";
 const LS = {
@@ -842,7 +838,6 @@ qmenu.onclick = e => {
   if (!act || !key) return;
   if (act === "spotify"){ queueOnSpotify(e.target.closest("button"), key); return; }
   if (act === "discover"){ closeQmenu(); discover(queueList().find(x => x.key === key)); return; }
-  if (act === "lineage"){ closeQmenu(); familyTree(queueList().find(x => x.key === key)); return; }
   if (act === "decades"){ closeQmenu(); viewInDecades(queueList().find(x => x.key === key)); return; }
   closeQmenu();
   const list = queueList(), it = list.find(x => x.key === key), rest = list.filter(x => x.key !== key);
@@ -1009,7 +1004,6 @@ function placeSearch(){
   Object.assign(box.style, { width: w + "px", left: Math.max(8, Math.min(innerWidth - w - 8, x)) + "px", top: Math.max(8, y) + "px" });
 }
 addEventListener("resize", () => placeSearch());
-addEventListener("resize", () => { if (view === "lineage") Lineage.wires($("#lineage .lg-tree")); });
 
 /* ---------- discover: one album and the music related to it (discover.js does the looking) ---------- */
 let dzState = LS.get("discover"), dzRun = 0;
@@ -1018,11 +1012,11 @@ function seedOf(a){
   const name = a.name || a.album || t || "", artist = (a.artist || rest.join(" · ")).split(", ")[0] || "";
   return { name: cleanTitle(name) || name, artist, year: a.year || null, src: a.src || "" };
 }
-// Every Discover and Family Tree is kept (blurbs and all), so opening an album again asks no other site.
-// Once it's old (Discover after a month, Family Tree after six), it's looked up again quietly in the
+// Every Discover is kept (blurbs and all), so opening an album again asks no other site.
+// Once it's a month old, it's looked up again quietly in the
 // background and the update shows the next time that album is opened, never while you're looking at it.
 // A Discover update only adds: newly found albums join the end of their group, nothing is taken away.
-const SAVED = { discover: 30 * 864e5, lineage: 180 * 864e5 }, SAVED_MAX = 60;
+const SAVED = { discover: 30 * 864e5 }, SAVED_MAX = 60;
 const savedKey = seed => resultKey(seed.name, seed.artist);
 // discover's saved results moved to .v2 when the blurbs got shorter (the lookups underneath are still remembered)
 const savedName = tab => tab === "discover" ? "discover.saved.v2" : tab + ".saved";
@@ -1104,35 +1098,8 @@ function discoverItem(i){
   return r && { id: "dz" + r.dz, wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src, url: r.url, title: r.name + " · " + r.artist };
 }
 
-/* ---------- family tree: an album with what led to it below and what it led to above (lineage.js) ---------- */
-let lgState = LS.get("lineage"), lgRun = 0;
-const hasTree = res => [...(res.before || []), ...(res.after || [])].some(g => g.length);
-async function familyTree(a){
-  if (!a) return;
-  const seed = seedOf(a), run = ++lgRun, saved = savedGet("lineage", seed);
-  if (saved){
-    lgState = saved; LS.set("lineage", saved);
-    setView("lineage");
-    refreshLater("lineage", saved, () => Lineage.find(seed).then(f => hasTree(f) ? f : null), (old, fresh) => fresh);
-    return;
-  }
-  lgState = { seed, loading: true };
-  setView("lineage");
-  const res = await Lineage.find(seed).catch(e => (dbg("family tree failed:", e?.message || e), { seed, before: [[], []], after: [[], []], lanes: [] }));
-  if (run !== lgRun) return;
-  lgState = res;
-  if (hasTree(res)){ LS.set("lineage", res); savedPut("lineage", res); }
-  if (view === "lineage") renderLineage();
-}
-// it always opens with the album in the middle of the screen: scroll up for later music, down for earlier
-function renderLineage(){
-  Lineage.render($("#lineage"), lgState, { onPick: n => n && familyTree(n) });
-  $("#lineage .lg-seed")?.scrollIntoView({ block: "center" });
-}
-function lineageItem(k){
-  const n = Lineage.itemAt(lgState, k);
-  return n && { id: "lg" + (n.rg || norm(n.name + n.artist)), wax: true, album: n.name, artist: n.artist, year: n.year, src: n.src, url: n.rg ? "https://musicbrainz.org/release-group/" + n.rg : "", title: n.name + " · " + n.artist };
-}
+// Family Tree was taken out (Lineage is an empty tab for now): forget what it had saved
+LS.del("lineage"); LS.del("lineage.saved");
 
 /* ---------- views ---------- */
 let view = ["wall", "decades", "pantheon", "wax", "queue", "ipod", "discover", "lineage"].includes(LS.get("view")) ? LS.get("view") : "wall";
@@ -1154,7 +1121,6 @@ function setView(v){
   if (v === "decades"){ centerNext = true; renderDecades(); }
   if (v === "pantheon") renderPantheon();
   if (v === "discover") renderDiscover();
-  if (v === "lineage") renderLineage();
   $("#wallNone").classList.toggle("hidden", !(v === "wall" && wallFilter && !albums.some(a => wallFilter.has(a.id))));
   placeSearch();
 }
@@ -1609,19 +1575,18 @@ document.addEventListener("contextmenu", e => {
     for (const b of menu.querySelectorAll("button")) b.classList.toggle("hidden", b.dataset.act !== "ipodout");
     return placeMenu(e);
   }
-  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id], #discover .dz-tile, #lineage .lg-node");
+  const tile = e.target.closest("#wall img, #pantheon img, .tiles img, #wax img, #ipod [data-id], #discover .dz-tile");
   if (!tile) return;
   e.preventDefault();
   if (drag) return;
   // a Wax record stands in for its Spotify version, which is looked up straight away
   // so does an album in Discover's row
-  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i) || tile.closest("#lineage") && lineageItem(tile.dataset.k);
+  const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i);
   if (rec) rec.wax = true;
   const album = rec || (tile.closest("#pantheon, #ipod") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
   if (!album) return;
   menuFor = album;
   menu.querySelector('[data-act="discover"]').classList.remove("hidden");
-  menu.querySelector('[data-act="lineage"]').classList.remove("hidden");
   const d = rec ? null : decadeOf(album);
   menu.querySelector('[data-act="top"]').classList.toggle("hidden", !d);
   // the iPod has no ranking to send things to the end of; it can drop an album instead, and the Wall can put it back
@@ -1656,7 +1621,6 @@ menu.onclick = e => {
     return;
   }
   if (act === "discover"){ closeMenu(); discover(album); return; }
-  if (act === "lineage"){ closeMenu(); familyTree(album); return; }
   if (act === "decades"){ closeMenu(); viewInDecades(album); return; }
   if (act === "pantheon" && album.wax){
     const btn = e.target.closest("button");
