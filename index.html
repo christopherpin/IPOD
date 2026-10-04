@@ -168,6 +168,8 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
   <button data-act="queue">Add To Queue</button>
+  <button data-act="ipodout">Remove From iPod</button>
+  <button data-act="ipodin">Add To iPod</button>
 </div>
 <div class="menu hidden" id="qmenu">
   <button data-act="spotify">Queue On Spotify</button>
@@ -909,10 +911,20 @@ bar.addEventListener("pointerdown", e => {
 });
 
 /* ---------- iPod (ipod.js) ---------- */
+// albums taken off the iPod with right-click stay on every grid; their ids are kept in wall.ipod.hidden
+const ipodHidden = () => LS.get("ipod.hidden", []);
+const offIpod = a => { const h = ipodHidden(); return !!a && (a.ids || [a.id]).some(id => h.includes(id)); };
 function showIpod(){
   if (!loaded) return; // drawn once every album is in
-  IPod.show($("#ipod"), { albums, clean: cleanTitle,
-    playlists: () => [{ name: "Pantheon", albums: pantheon().slots.filter(Boolean).map(byAnyId).filter(Boolean) }] });
+  IPod.show($("#ipod"), { albums, clean: cleanTitle, hidden: offIpod,
+    playlists: () => [{ name: "Pantheon", albums: pantheon().slots.filter(Boolean).map(byAnyId).filter(a => a && !offIpod(a)) }] });
+}
+function setOnIpod(album, on){
+  const ids = album.ids || [album.id];
+  const h = ipodHidden().filter(id => !ids.includes(id));
+  if (!on) h.push(album.id);
+  LS.set("ipod.hidden", h);
+  if (on) IPod.reset(); else IPod.drop(album);
 }
 
 /* ---------- share: a read-only copy of the iPod at share/, for other people ---------- */
@@ -922,11 +934,11 @@ const REPO = "christopherpin/IPOD", SHARE_URL = "https://christopherpin.github.i
 function snapshot(){
   const slim = a => ({ id: a.id, name: cleanTitle(a.name || (a.title || "").split(" · ")[0]), artist: a.artist || "",
     year: a.year || null, released: a.released || null, src: a.src });
-  const lib = albums.filter(a => a && a.id && a.src).map(slim);
+  const lib = albums.filter(a => a && a.id && a.src && !offIpod(a)).map(slim);
   const have = new Set(lib.map(a => a.id)), extra = [], ids = [];
   for (const id of pantheon().slots){
     const a = id && byAnyId(id);
-    if (!a || !a.src) continue;
+    if (!a || !a.src || offIpod(a)) continue;
     if (!have.has(a.id)){ have.add(a.id); extra.push(slim(a)); }
     ids.push(a.id);
   }
@@ -1156,7 +1168,11 @@ document.addEventListener("contextmenu", e => {
   menuFor = album;
   const d = rec ? null : decadeOf(album);
   menu.querySelector('[data-act="top"]').classList.toggle("hidden", !d);
-  menu.querySelector('[data-act="end"]').classList.toggle("hidden", !d);
+  // the iPod has no ranking to send things to the end of; it can drop an album instead, and the Wall can put it back
+  const onIpod = !!tile.closest("#ipod");
+  menu.querySelector('[data-act="end"]').classList.toggle("hidden", !d || onIpod);
+  menu.querySelector('[data-act="ipodout"]').classList.toggle("hidden", !onIpod);
+  menu.querySelector('[data-act="ipodin"]').classList.toggle("hidden", !(tile.closest("#wall") && offIpod(album)));
   const pb = menu.querySelector('[data-act="pantheon"]');
   pb.disabled = false;
   const known = rec && LS.get("wax.spotify", {})[rec.id];
@@ -1196,6 +1212,7 @@ menu.onclick = e => {
   closeMenu();
   if (act === "pantheon"){ togglePantheon(album); return; }
   if (act === "queue"){ toggleQueue(album); return; }
+  if (act === "ipodout" || act === "ipodin"){ setOnIpod(album, act === "ipodin"); return; }
   rankEdge(act, album);
 };
 function togglePantheon(album){
