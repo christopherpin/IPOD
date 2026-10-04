@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Albums</title>
-<link rel="stylesheet" href="ipod.css?v=2026-10-04b">
-<link rel="stylesheet" href="discover.css?v=2026-10-04b">
-<link rel="stylesheet" href="lineage.css?v=2026-10-04b">
+<link rel="stylesheet" href="ipod.css?v=2026-10-04c">
+<link rel="stylesheet" href="discover.css?v=2026-10-04c">
+<link rel="stylesheet" href="lineage.css?v=2026-10-04c">
 <style>
 :root{ --rank:#ffd400; --rank-dark:#947b00; --text-dark:#878788; --bg:#0b0b0c; --tile:#161618; --text:#e9e9ea; --muted:#8a8a90; --accent:#1ed760; }
 *{box-sizing:border-box}
@@ -217,10 +217,10 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-view="pantheon" data-label="Pantheon">Pantheon</button>
 </nav>
 
-<script src="ipod.js?v=2026-10-04b"></script>
-<script src="wiki.js?v=2026-10-04b"></script>
-<script src="discover.js?v=2026-10-04b"></script>
-<script src="lineage.js?v=2026-10-04b"></script>
+<script src="ipod.js?v=2026-10-04c"></script>
+<script src="wiki.js?v=2026-10-04c"></script>
+<script src="discover.js?v=2026-10-04c"></script>
+<script src="lineage.js?v=2026-10-04c"></script>
 <script>
 "use strict";
 const LS = {
@@ -1024,12 +1024,14 @@ function seedOf(a){
 // A Discover update only adds: newly found albums join the end of their group, nothing is taken away.
 const SAVED = { discover: 30 * 864e5, lineage: 180 * 864e5 }, SAVED_MAX = 60;
 const savedKey = seed => resultKey(seed.name, seed.artist);
-const savedGet = (tab, seed) => LS.get(tab + ".saved", {})[savedKey(seed)] || null;
+// discover's saved results moved to .v2 when the blurbs got shorter (the lookups underneath are still remembered)
+const savedName = tab => tab === "discover" ? "discover.saved.v2" : tab + ".saved";
+const savedGet = (tab, seed) => LS.get(savedName(tab), {})[savedKey(seed)] || null;
 function savedPut(tab, res){
-  const all = LS.get(tab + ".saved", {});
+  const all = LS.get(savedName(tab), {});
   all[savedKey(res.seed)] = res;
   for (const k of Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0)).slice(SAVED_MAX)) delete all[k];
-  LS.set(tab + ".saved", all);
+  LS.set(savedName(tab), all);
 }
 const relooking = new Set();
 function refreshLater(tab, saved, look, merge){
@@ -1045,7 +1047,7 @@ function addRecs(old, fresh){
   return { ...old, recs, at: now };
 }
 const ownedSet = () => new Set(albums.map(x => resultKey(x.name || (x.title || "").split(" · ")[0], x.artist || "")));
-const findRecs = seed => { const have = ownedSet(); return Discover.find(seed, { owned: (n, ar) => have.has(resultKey(n, ar)) }); };
+const findRecs = (seed, more = {}) => { const have = ownedSet(); return Discover.find(seed, { owned: (n, ar) => have.has(resultKey(n, ar)), ...more }); };
 
 // a new Discover replaces whatever was there; albums you already have are left out of the row
 async function discover(a){
@@ -1065,13 +1067,37 @@ async function discover(a){
   if (res.recs.length){ LS.set("discover", res); savedPut("discover", res); }
   if (view === "discover") renderDiscover();
 }
+// Refresh: a whole new batch for the same album, skipping every artist it has shown before. The new
+// batch replaces the row and is saved like the first one, so it's there the next time too.
+async function moreDiscover(){
+  const st = dzState;
+  if (!st?.seed || st.loading || st.busy) return;
+  dzState = { ...st, busy: true }; renderDiscover();
+  const seen = [...new Set([...(st.seen || []), ...st.recs.map(r => r.artist)])];
+  const round = (st.round || 0) + 1;
+  const res = await findRecs(st.seed, { exclude: new Set(seen), round }).catch(e => (dbg("discover refresh failed:", e?.message || e), null));
+  if (dzState.seed !== st.seed) return;
+  if (res && res.recs.length){
+    dzState = { ...st, recs: res.recs, seen, round, busy: false, exhausted: false };
+    const { busy, exhausted, ...keep } = dzState;
+    LS.set("discover", keep); savedPut("discover", keep);
+  } else dzState = { ...st, busy: false, exhausted: true };
+  if (view === "discover") renderDiscover();
+}
 // albums you've since added to your library drop out of the row
 let dzShown = null;
 function renderDiscover(){
   const have = ownedSet();
   dzShown = dzState?.recs ? { ...dzState, recs: dzState.recs.filter(r => !have.has(resultKey(r.name, r.artist))) } : dzState;
-  Discover.render($("#discover"), dzShown, { onPick: r => discover(r) });
+  Discover.render($("#discover"), dzShown, { onPick: r => discover(r), onMore: moreDiscover });
 }
+// the mouse wheel anywhere on Discover moves the row of albums sideways
+$("#discover").addEventListener("wheel", e => {
+  const row = $("#discover .dz-row");
+  if (!row || row.scrollWidth <= row.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  e.preventDefault();
+  row.scrollLeft += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? row.clientWidth : 1);
+}, { passive: false });
 // an album in the row, in the shape a Wax record has, so the menu finds its Spotify version the same way
 function discoverItem(i){
   const r = dzShown?.recs?.[i];

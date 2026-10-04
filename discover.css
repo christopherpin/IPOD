@@ -8,8 +8,8 @@
 .dz-name{font:700 22px/1.2 "Helvetica Neue",Helvetica,Arial,sans-serif}
 .dz-sub{color:var(--muted);font-size:13px;margin-top:3px}
 .dz-note{margin:36px 16px 0;color:var(--muted);text-align:center}
-.dz-row{align-self:stretch;display:flex;gap:20px;margin-top:34px;padding:4px 24px 12px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x proximity;scroll-padding:0 24px;scrollbar-width:thin;scrollbar-color:#2a2a2e transparent}
-.dz-tile{flex:0 0 200px;width:200px;min-width:0;scroll-snap-align:start;cursor:pointer}
+.dz-row{align-self:stretch;display:flex;gap:20px;margin-top:34px;padding:4px 24px 12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:#2a2a2e transparent}
+.dz-tile{flex:0 0 200px;width:200px;min-width:0;cursor:pointer}
 .dz-cover{position:relative;aspect-ratio:1;background:var(--tile);overflow:hidden}
 .dz-cover i{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:12px;text-align:center;font:600 13px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-style:normal;color:var(--muted)}
 .dz-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .4s;user-select:none;-webkit-user-drag:none}
@@ -24,4 +24,7 @@ body.dock-left .dz{padding-left:var(--dock)}
 body.dock-right .dz{padding-right:var(--dock)}
 body.phone .dz{padding:20px 0 calc(var(--dock) + 24px)}
 body.phone .dz-tile{flex-basis:170px;width:170px}
-body.phone .dz-row{gap:14px;padding:4px 16px 12px;scroll-padding:0 16px}
+body.phone .dz-row{gap:14px;padding:4px 16px 12px}
+.dz-more{min-width:170px;margin-top:12px;font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:var(--tile);border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
+.dz-more:hover:not(:disabled){color:var(--text)}
+.dz-more:disabled{cursor:default}
