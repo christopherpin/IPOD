@@ -230,10 +230,15 @@ async function handleRedirect(){
     client_id:LS.get("clientId"), code_verifier:LS.get("verifier") });
   LS.del("verifier"); LS.del("state");
 }
+let refreshing = null; // one token refresh at a time: Spotify replaces the refresh token each time it's used
 async function accessToken(){
   let t = LS.get("token");
   if (!t) return null;
-  if (Date.now() > t.exp && t.refresh) t = await tokenRequest({ grant_type:"refresh_token", refresh_token:t.refresh, client_id:LS.get("clientId") });
+  if (Date.now() > t.exp && t.refresh){
+    refreshing ||= tokenRequest({ grant_type:"refresh_token", refresh_token:t.refresh, client_id:LS.get("clientId") })
+      .finally(() => { refreshing = null; });
+    t = await refreshing;
+  }
   return t.access;
 }
 async function api(path, tries=0){
@@ -447,6 +452,7 @@ async function pool(items, n, fn){
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length){ const k = i++; out[k] = await fn(items[k]); } }));
   return out;
 }
+const addRecent = (col, recent) => col.add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
 async function load(col){
   // ask Spotify for everything at once rather than one page after another
   const recentP = safe("/me/player/recently-played?limit=50");
@@ -460,8 +466,7 @@ async function load(col){
   const restP = pool(offsets, 6, o => safe(`/me/albums?limit=50&offset=${o}`));
 
   // then add them in wall order: 1. last 50 plays, newest first
-  const recent = await recentP;
-  col.add((recent?.items || []).sort((a, b) => b.played_at.localeCompare(a.played_at)).map(i => i.track?.album));
+  addRecent(col, await recentP);
   // 2. top tracks: 4 weeks, 6 months, all time
   for (const p of await topsP) col.add((p?.items || []).map(t => t.album));
   // 3. saved albums, most recently saved first
@@ -1384,8 +1389,15 @@ $("#form").onsubmit = async e => {
   startViews();
   const cached = LS.get(CACHE);
   if (Array.isArray(cached) && cached.length){
-    // show last visit's albums straight away; fetch a fresh list quietly for next time, so nothing moves now
-    albums = cached; ready();
+    // Before drawing, ask Spotify for just the latest plays (one quick request) and put those albums first,
+    // so the wall opens on what you've been listening to. Nothing is drawn until this is settled.
+    const wait = setTimeout(() => $("#loading").classList.remove("hidden"), 600);
+    const recent = await Promise.race([safe("/me/player/recently-played?limit=50").catch(() => null), sleep(4000).then(() => null)]);
+    clearTimeout(wait);
+    albums = cached;
+    if (recent?.items?.length){ const rc = collector(); addRecent(rc, recent); albums = mergeLibrary(rc.list, cached); LS.set(CACHE, albums); }
+    ready();
+    // then fetch the full list (top tracks, saved albums) quietly for next time, so nothing moves now
     const col = collector();
     load(col).then(() => { if (col.list.length) LS.set(CACHE, mergeLibrary(col.list, LS.get(CACHE))); })
       .catch(e => { if (e.status === 401 || e.status === 403) LS.del("token"); });
