@@ -202,7 +202,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="top">Send To Top 10</button>
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
-  <button data-act="queue">Add To Queue</button>
+  <button data-act="queue">Add To Queue Tab</button>
   <button data-act="spotify">Queue On Spotify</button>
   <button data-act="ipodout">Remove From iPod</button>
   <button data-act="ipodin">Add To iPod</button>
@@ -1746,7 +1746,7 @@ document.addEventListener("contextmenu", e => {
   sb.disabled = false; sb.classList.remove("hidden"); sb.textContent = "Queue On Spotify";
   const qb = menu.querySelector('[data-act="queue"]');
   qb.disabled = false; qb.classList.remove("hidden");
-  qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue" : "Add To Queue";
+  qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue Tab" : "Add To Queue Tab";
   if (rec) spotifyFor(rec).catch(() => {});
   menu.querySelector('[data-act="decades"]').classList.toggle("hidden", !!tile.closest("#decades") || !inDecades(album));
   placeMenu(e);
