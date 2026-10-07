@@ -91,6 +91,8 @@ body.decade-view{overflow:hidden}
 .menu{position:fixed;z-index:40;padding:4px;border-radius:8px;background:var(--rank);box-shadow:0 10px 30px rgba(0,0,0,.5)}
 .menu button{display:block;font:600 13px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#000;background:none;border:0;border-radius:5px;padding:10px 14px;cursor:pointer;white-space:nowrap}
 .menu button:hover{background:rgba(0,0,0,.1)}
+/* Greenlight: sends the album to your Spotify queue, so it lights up Spotify green */
+.menu button[data-act="spotify"]:hover{background:#1DB954}
 /* pantheon: a numbered 1-100 grid, ten to a row, with a queue of albums waiting to be placed */
 .pantheon{padding:4px 4px 72px}
 .pqueue{margin-bottom:12px;padding:4px;border-radius:4px}
@@ -203,7 +205,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
   <button data-act="queue">Add To Queue Tab</button>
-  <button data-act="spotify">Queue On Spotify</button>
+  <button data-act="spotify">Greenlight</button>
   <button data-act="ipodout">Remove From iPod</button>
   <button data-act="ipodin">Add To iPod</button>
   <button data-act="decades">View In Decades</button>
@@ -215,7 +217,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 <div class="menu hidden" id="qmenu">
   <button data-act="discover">Discover</button>
   <button data-act="lineage">Send To Lineage</button>
-  <button data-act="spotify">Queue On Spotify</button>
+  <button data-act="spotify">Greenlight</button>
   <button data-act="first">Move To Front</button>
   <button data-act="remove">Remove From Queue</button>
   <button data-act="decades">View In Decades</button>
@@ -840,7 +842,7 @@ $("#qbody").addEventListener("contextmenu", e => {
   // only albums Spotify has can go into your Spotify queue
   const it = queueList().find(x => x.key === qmenuFor), sb = qmenu.querySelector('[data-act="spotify"]');
   sb.classList.toggle("hidden", !spotifyAlbumId(it));
-  sb.disabled = false; sb.textContent = "Queue On Spotify";
+  sb.disabled = false; sb.textContent = "Greenlight";
   qmenu.querySelector('[data-act="decades"]').classList.toggle("hidden", !inDecades(it));
   qmenu.classList.remove("hidden");
   qmenu.style.left = Math.min(e.clientX, innerWidth - qmenu.offsetWidth - 4) + "px";
@@ -1743,7 +1745,7 @@ document.addEventListener("contextmenu", e => {
   const known = rec && LS.get("wax.spotify", {})[rec.id];
   pb.textContent = (rec ? known && inPantheon(byAnyId(known.id) || known) : inPantheon(album)) ? "Remove From Pantheon" : "Send To Pantheon";
   const sb = menu.querySelector('[data-act="spotify"]');
-  sb.disabled = false; sb.classList.remove("hidden"); sb.textContent = "Queue On Spotify";
+  sb.disabled = false; sb.classList.remove("hidden"); sb.textContent = "Greenlight";
   const qb = menu.querySelector('[data-act="queue"]');
   qb.disabled = false; qb.classList.remove("hidden");
   qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue Tab" : "Add To Queue Tab";
