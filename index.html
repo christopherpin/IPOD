@@ -203,6 +203,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
   <button data-act="end">Send To End</button>
   <button data-act="pantheon">Send To Pantheon</button>
   <button data-act="queue">Add To Queue</button>
+  <button data-act="spotify">Queue On Spotify</button>
   <button data-act="ipodout">Remove From iPod</button>
   <button data-act="ipodin">Add To iPod</button>
   <button data-act="decades">View In Decades</button>
@@ -848,7 +849,11 @@ $("#qbody").addEventListener("contextmenu", e => {
 qmenu.onclick = e => {
   const act = e.target.closest("button")?.dataset.act, key = qmenuFor;
   if (!act || !key) return;
-  if (act === "spotify"){ queueOnSpotify(e.target.closest("button"), key); return; }
+  if (act === "spotify"){
+    const it = queueList().find(x => x.key === key);
+    queueOnSpotify(e.target.closest("button"), async () => spotifyAlbumId(it), () => qmenuFor === key, closeQmenu);
+    return;
+  }
   if (act === "discover"){ closeQmenu(); discover(queueList().find(x => x.key === key)); return; }
   if (act === "lineage"){ closeQmenu(); toLineage(queueList().find(x => x.key === key)); return; }
   if (act === "decades"){ closeQmenu(); viewInDecades(queueList().find(x => x.key === key)); return; }
@@ -877,22 +882,24 @@ async function queuePlaylist(){
   LS.set("spotifyQueuePlaylist", pl.id); return pl.id;
 }
 const spotifyAlbumId = it => ((it?.url || "").match(/open\.spotify\.com\/album\/([A-Za-z0-9]+)/) || [])[1] || null;
-// Adds every track of the album to whatever Spotify is playing on right now, in order.
-// The button itself says how it went, so nothing else pops up.
-async function queueOnSpotify(btn, key){
+// Adds every track of the album to whatever Spotify is playing on right now, in order, or to your
+// "Queue" playlist when nothing is playing. Used by every right-click menu: getId finds the album's
+// Spotify id, still says the menu is still open on it, and the button itself says how it went.
+async function queueOnSpotify(btn, getId, still, close){
   if (btn.disabled) return;
-  const say = text => { if (qmenuFor === key) btn.textContent = text; };
-  const id = spotifyAlbumId(queueList().find(x => x.key === key));
-  if (!id) return;
+  const say = text => { if (still()) btn.textContent = text; };
+  btn.disabled = true;
   const granted = (LS.get("token")?.scope || "").split(" ");
   if (!SCOPES.split(" ").every(x => granted.includes(x)) && LS.get("scopesAsked") !== SCOPES){
     // one-time: Spotify is asked for every permission at once; your sign-in is then kept and renewed
     LS.set("scopesAsked", SCOPES);
-    btn.disabled = true; say("Connecting To Spotify…");
+    say("Connecting To Spotify…");
     return startLogin(LS.get("clientId") || CLIENT_ID).catch(() => { btn.disabled = false; say("Couldn't Reach Spotify"); });
   }
-  btn.disabled = true; say("Adding…");
+  say("Adding…");
   try {
+    const id = await getId();
+    if (!id){ say("Not Found On Spotify"); return; }
     const uris = [];
     for (let path = `/albums/${id}/tracks?limit=50`; path; ){
       const j = await api(path);
@@ -924,11 +931,11 @@ async function queueOnSpotify(btn, key){
         if (!r.ok) throw new Error("Spotify Didn't Answer");
       }
       say("Added To Your Queue Playlist ✓");
-      setTimeout(() => { if (qmenuFor === key) closeQmenu(); }, 1600);
+      setTimeout(() => { if (still()) close(); }, 1600);
       return;
     }
     say("Queued On Spotify ✓");
-    setTimeout(() => { if (qmenuFor === key) closeQmenu(); }, 1200);
+    setTimeout(() => { if (still()) close(); }, 1200);
   } catch(err){ say(err.message || "Spotify Didn't Answer"); }
 }
 addEventListener("pointerdown", e => { if (!e.target.closest("#qmenu")) closeQmenu(); }, true);
@@ -1735,6 +1742,8 @@ document.addEventListener("contextmenu", e => {
   pb.disabled = false; pb.classList.remove("hidden");
   const known = rec && LS.get("wax.spotify", {})[rec.id];
   pb.textContent = (rec ? known && inPantheon(byAnyId(known.id) || known) : inPantheon(album)) ? "Remove From Pantheon" : "Send To Pantheon";
+  const sb = menu.querySelector('[data-act="spotify"]');
+  sb.disabled = false; sb.classList.remove("hidden"); sb.textContent = "Queue On Spotify";
   const qb = menu.querySelector('[data-act="queue"]');
   qb.disabled = false; qb.classList.remove("hidden");
   qb.textContent = inQueue(rec ? (known || rec) : album) ? "Remove From Queue" : "Add To Queue";
@@ -1760,6 +1769,12 @@ menu.onclick = e => {
   if (act === "discover"){ closeMenu(); discover(album); return; }
   if (act === "lineage"){ closeMenu(); toLineage(album); return; }
   if (act === "decades"){ closeMenu(); viewInDecades(album); return; }
+  if (act === "spotify"){
+    // Wax, Discover and Lineage albums go by their Spotify version; the rest are Spotify albums already
+    const getId = async () => album.wax ? spotifyAlbumId(album) || (await spotifyFor(album))?.id : album.id;
+    queueOnSpotify(e.target.closest("button"), getId, () => menuFor === album, closeMenu);
+    return;
+  }
   if (act === "pantheon" && album.wax){
     const btn = e.target.closest("button");
     if (btn.disabled) return;
