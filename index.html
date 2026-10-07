@@ -130,6 +130,25 @@ body.decade-view{overflow:hidden}
 .qcap{margin-top:6px;padding:0 2px;line-height:1.3;cursor:pointer}
 .qcap div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qcap .sub{color:var(--muted);font-size:12px}
+/* two rows: your Queue tab list, then what Spotify is about to play, both scrolling sideways */
+.qhead{display:flex;align-items:center;gap:10px;margin:10px 2px 8px;min-height:28px}
+.qhead h3{margin:0;font:700 12px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.qrow{display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;padding-bottom:6px;scrollbar-width:thin}
+.qrow > .qtile,.qrow > .spcell{flex:0 0 160px}
+.spcell{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.spcell.placeholder{opacity:.15}
+.spcell.open .qtile{outline:2px solid #1DB954;outline-offset:-2px}
+.qbtn{margin-left:auto;font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:var(--tile);border:1px solid #2a2a2e;border-radius:999px;padding:7px 12px;cursor:pointer}
+.qbtn + .qbtn{margin-left:0}
+.qbtn:hover{color:var(--text)}
+.qbtn.go{background:#1DB954;border-color:#1DB954;color:#000}
+.qbtn:disabled{opacity:.5;cursor:default}
+.sptracks{margin:8px 2px 0;padding:0;list-style:none;max-width:560px}
+.sptracks li{display:flex;gap:12px;padding:6px 8px;border-radius:5px;cursor:default}
+.sptracks li:hover{background:var(--tile)}
+.sptracks li span{color:var(--muted);min-width:22px;text-align:right}
+.sptracks li em{margin-left:auto;font-style:normal;color:var(--muted)}
+.spghost{position:fixed;z-index:30;width:160px;pointer-events:none;box-shadow:0 18px 40px rgba(0,0,0,.6);transform:scale(1.04)}
 /* share: a read-only copy of the iPod for other people, saved to share/ in the site */
 .sharebtn{position:fixed;top:14px;right:14px;z-index:15;font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--muted);background:rgba(22,22,24,.82);border:0;border-radius:999px;padding:9px 14px;cursor:pointer}
 .sharebtn:hover{color:var(--text)}
@@ -162,6 +181,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 <main class="queue hidden" id="queue">
   <div class="qbar"><input id="qsearch" type="search" placeholder="Search for an album" autocomplete="off" spellcheck="false"></div>
   <div id="qbody"></div>
+  <section id="spq"></section>
 </main>
 <main class="ipod hidden" id="ipod"></main>
 <main class="dz hidden" id="discover"></main>
@@ -213,6 +233,9 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 <div class="menu hidden" id="dmenu">
   <button data-act="expand">Expand Decade</button>
   <button data-act="collapse">Collapse Decade</button>
+</div>
+<div class="menu hidden" id="spmenu">
+  <button data-act="remove">Remove From Spotify Queue</button>
 </div>
 <div class="menu hidden" id="qmenu">
   <button data-act="discover">Discover</button>
@@ -281,7 +304,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const CLIENT_ID = "813caa88dc414f8b8c3dd58c09e55c9f"; // set to your Spotify app's Client ID to skip typing it
 const REDIRECT = location.origin + location.pathname;
 // everything the site will ever ask for, requested together so you only approve once
-const SCOPES = "user-read-recently-played user-top-read user-library-read user-modify-playback-state playlist-read-private playlist-modify-private playlist-modify-public";
+const SCOPES = "user-read-recently-played user-top-read user-library-read user-modify-playback-state playlist-read-private playlist-modify-private playlist-modify-public user-read-playback-state";
 
 /* ---------- auth (PKCE) ---------- */
 function b64url(bytes){ return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
@@ -801,12 +824,16 @@ function renderQueue(){
     const list = queueList();
     if (!list.length) note("Search for an album to add it to your queue.");
     else {
-      const grid = document.createElement("div"); grid.className = "qgrid qlist";
+      const grid = document.createElement("div"); grid.className = "qrow qlist";
       for (const it of list) grid.appendChild(qtile(it));
       frag.appendChild(grid);
     }
+    const head = document.createElement("div"); head.className = "qhead"; head.innerHTML = "<h3>Queue</h3>";
+    frag.prepend(head);
   }
   body.replaceChildren(frag);
+  $("#spq").classList.toggle("hidden", !!qResults);
+  if (!qResults) showSpotifyQueue();
 }
 $("#qsearch").addEventListener("input", () => {
   clearTimeout(qTimer);
@@ -865,23 +892,23 @@ qmenu.onclick = e => {
   renderQueue();
 };
 // your "Queue" playlist on Spotify, found or made once and remembered
-async function queuePlaylist(){
-  const known = LS.get("spotifyQueuePlaylist");
+async function queuePlaylist(name = "Queue", store = "spotifyQueuePlaylist", about = "Albums sent from the iPod's Queue tab"){
+  const known = LS.get(store);
   if (known) return known;
   const me = await api("/me");
   for (let path = "/me/playlists?limit=50"; path; ){
     const j = await api(path);
-    const hit = (j.items || []).find(pl => pl && pl.name === "Queue" && pl.owner?.id === me.id);
-    if (hit){ LS.set("spotifyQueuePlaylist", hit.id); return hit.id; }
+    const hit = (j.items || []).find(pl => pl && pl.name === name && pl.owner?.id === me.id);
+    if (hit){ LS.set(store, hit.id); return hit.id; }
     path = j.next;
   }
   const tok = await accessToken();
   const r = await fetch("https://api.spotify.com/v1/me/playlists", { method: "POST",
     headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "Queue", public: false, description: "Albums sent from the iPod's Queue tab" }) });
-  if (!r.ok) throw new Error("Couldn't Make A Queue Playlist");
+    body: JSON.stringify({ name, public: false, description: about }) });
+  if (!r.ok) throw new Error("Couldn't Make A " + name + " Playlist");
   const pl = await r.json();
-  LS.set("spotifyQueuePlaylist", pl.id); return pl.id;
+  LS.set(store, pl.id); return pl.id;
 }
 const spotifyAlbumId = it => ((it?.url || "").match(/open\.spotify\.com\/album\/([A-Za-z0-9]+)/) || [])[1] || null;
 // Adds every track of the album to whatever Spotify is playing on right now, in order, or to your
@@ -944,6 +971,215 @@ addEventListener("pointerdown", e => { if (!e.target.closest("#qmenu")) closeQme
 addEventListener("keydown", e => { if (e.key === "Escape") closeQmenu(); });
 addEventListener("wheel", closeQmenu, { passive: true });
 addEventListener("blur", closeQmenu);
+
+/* ---------- your Spotify queue, as albums, on the Queue tab ---------- */
+// Spotify lets a site read its queue but not take things out of it or reorder it. So edits are made
+// here, and Sync With Spotify puts the new order in a private "Up Next" playlist, steps past what was
+// waiting in Spotify's queue, and plays the playlist from the song you're on, where you were in it.
+let spq = null;            // { now, groups: [{ id, name, artist, src, tracks: [{ uri, name, artist, ms }] }], dirty, open }
+let spqLoading = false, spqMsg = "";
+const hasScopes = () => { const g = (LS.get("token")?.scope || "").split(" "); return SCOPES.split(" ").every(x => g.includes(x)); };
+async function spotifySend(method, path, body){
+  for (;;){
+    const tok = await accessToken();
+    const r = await fetch("https://api.spotify.com/v1" + path, { method,
+      headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+    if (r.status === 429){ await sleep((+r.headers.get("Retry-After") || 2) * 1000); continue; }
+    return r;
+  }
+}
+const spTrack = t => t && t.uri && { uri: t.uri, name: t.name || "", ms: t.duration_ms || 0,
+  artist: (t.artists || []).map(a => a.name).join(", ") || t.show?.name || "",
+  album: t.album?.id || t.show?.id || t.uri, albumName: t.album?.name || t.show?.name || t.name || "",
+  src: ((t.album?.images || t.images || t.show?.images || []).find(i => i.width && i.width <= 320 && i.width >= 250) || (t.album?.images || t.images || t.show?.images || [])[0] || {}).url || "" };
+// songs in a row from the same album make one album tile, so the order stays exactly Spotify's
+function groupTracks(tracks){
+  const groups = [];
+  for (const t of tracks){
+    const last = groups[groups.length - 1];
+    if (last && last.album === t.album) last.tracks.push(t);
+    else groups.push({ id: "g" + groups.length + "-" + t.album, album: t.album, name: t.albumName, artist: t.artist.split(", ")[0], src: t.src, tracks: [t] });
+  }
+  return groups;
+}
+async function loadSpotifyQueue(){
+  spqLoading = true; spqMsg = "";
+  try {
+    const j = await api("/me/player/queue");
+    const now = spTrack(j.currently_playing);
+    spq = now ? { now, groups: groupTracks((j.queue || []).map(spTrack).filter(Boolean)), dirty: false, open: null } : null;
+    if (!now) spqMsg = "Nothing is playing on Spotify right now. Play something in Spotify, then come back.";
+  } catch(e){ spq = null; spqMsg = "Spotify didn't answer. Try again in a moment."; }
+  spqLoading = false;
+  if (view === "queue" && !qResults) renderSpotifyQueue();
+}
+function showSpotifyQueue(){
+  // edits you haven't synced stay put; otherwise fetch what Spotify has now
+  if (spq?.dirty || spqLoading){ renderSpotifyQueue(); return; }
+  if (hasScopes() && LS.get("token")) loadSpotifyQueue();
+  renderSpotifyQueue();
+}
+function renderSpotifyQueue(){
+  const root = $("#spq"), frag = document.createDocumentFragment();
+  const head = document.createElement("div"); head.className = "qhead"; head.innerHTML = "<h3>Spotify Queue</h3>";
+  frag.appendChild(head);
+  const note = text => { const p = document.createElement("p"); p.className = "qnote"; p.textContent = text; frag.appendChild(p); };
+  if (!LS.get("token") || !hasScopes()){
+    const b = document.createElement("button"); b.className = "qbtn"; b.textContent = "Connect Spotify"; b.dataset.act = "connect";
+    head.appendChild(b);
+    note("Connect Spotify once to see and edit what it's about to play.");
+  } else if (!spq){
+    const b = document.createElement("button"); b.className = "qbtn"; b.textContent = "Refresh"; b.dataset.act = "refresh";
+    head.appendChild(b);
+    note(spqLoading ? "Loading…" : spqMsg);
+  } else {
+    const r = document.createElement("button"); r.className = "qbtn"; r.textContent = spq.dirty ? "Undo Changes" : "Refresh"; r.dataset.act = "refresh";
+    const sync = document.createElement("button"); sync.className = "qbtn" + (spq.dirty ? " go" : ""); sync.textContent = spqMsg || "Sync With Spotify";
+    sync.dataset.act = "sync"; sync.disabled = !spq.dirty;
+    head.append(r, sync);
+    if (!spq.groups.length) note("Nothing is queued after the song that's playing.");
+    else {
+      const row = document.createElement("div"); row.className = "qrow sprow";
+      for (const g of spq.groups){
+        const cell = document.createElement("div"); cell.className = "spcell" + (spq.open === g.id ? " open" : ""); cell.dataset.id = g.id;
+        const t = qtile({ key: g.id, name: g.name, artist: g.artist, src: g.src });
+        const cap = document.createElement("div"); cap.className = "qcap";
+        const n = document.createElement("div"); n.textContent = g.name;
+        const sub = document.createElement("div"); sub.className = "sub";
+        sub.textContent = g.tracks.length === 1 ? g.tracks[0].name : g.tracks.length + " songs";
+        cap.append(n, sub); cell.append(t, cap); row.appendChild(cell);
+      }
+      frag.appendChild(row);
+      const open = spq.groups.find(g => g.id === spq.open);
+      if (open){
+        // the songs of the album you clicked, in the order Spotify will play them
+        const ol = document.createElement("ol"); ol.className = "sptracks";
+        open.tracks.forEach((t, i) => {
+          const li = document.createElement("li"); li.dataset.uri = t.uri; li.dataset.i = i;
+          const n = document.createElement("span"); n.textContent = i + 1;
+          const name = document.createElement("div"); name.textContent = t.name;
+          const len = document.createElement("em"); len.textContent = Math.floor(t.ms / 60000) + ":" + String(Math.floor(t.ms / 1000) % 60).padStart(2, "0");
+          li.append(n, name, len); ol.appendChild(li);
+        });
+        frag.appendChild(ol);
+      }
+    }
+  }
+  root.replaceChildren(frag);
+}
+$("#spq").addEventListener("click", e => {
+  const act = e.target.closest("button")?.dataset.act;
+  if (act === "connect"){ LS.set("scopesAsked", SCOPES); startLogin(LS.get("clientId") || CLIENT_ID); return; }
+  if (act === "refresh"){ spq = null; spqLoading = true; renderSpotifyQueue(); loadSpotifyQueue(); return; }
+  if (act === "sync"){ syncSpotifyQueue(e.target.closest("button")); return; }
+  const cell = e.target.closest(".spcell");
+  if (cell && !spDragged){ spq.open = spq.open === cell.dataset.id ? null : cell.dataset.id; renderSpotifyQueue(); }
+});
+// right-click an album (or one of its songs) to take it out
+const spmenu = $("#spmenu");
+let spmenuFor = null;
+const closeSpmenu = () => { spmenu.classList.add("hidden"); spmenuFor = null; };
+$("#spq").addEventListener("contextmenu", e => {
+  const li = e.target.closest(".sptracks li"), cell = e.target.closest(".spcell");
+  if (!li && !cell) return;
+  e.preventDefault();
+  spmenuFor = li ? { group: spq.open, i: +li.dataset.i } : { group: cell.dataset.id };
+  spmenu.firstElementChild.textContent = li ? "Remove Song From Spotify Queue" : "Remove From Spotify Queue";
+  spmenu.classList.remove("hidden");
+  spmenu.style.left = Math.min(e.clientX, innerWidth - spmenu.offsetWidth - 4) + "px";
+  spmenu.style.top = Math.min(e.clientY, innerHeight - spmenu.offsetHeight - 4) + "px";
+});
+spmenu.onclick = e => {
+  const f = spmenuFor;
+  if (!e.target.closest("button") || !f || !spq) return;
+  closeSpmenu();
+  const g = spq.groups.find(x => x.id === f.group);
+  if (!g) return;
+  if (f.i != null && g.tracks.length > 1) g.tracks.splice(f.i, 1);
+  else { spq.groups = spq.groups.filter(x => x !== g); if (spq.open === g.id) spq.open = null; }
+  spq.dirty = true; spqMsg = ""; renderSpotifyQueue();
+};
+addEventListener("pointerdown", e => { if (!e.target.closest("#spmenu")) closeSpmenu(); }, true);
+addEventListener("keydown", e => { if (e.key === "Escape") closeSpmenu(); });
+addEventListener("wheel", closeSpmenu, { passive: true });
+addEventListener("blur", closeSpmenu);
+// drag albums along the row to reorder them (on touch, press and hold first)
+let spPending = null, spDrag = null, spDragged = false;
+$("#spq").addEventListener("pointerdown", e => {
+  const cell = e.target.closest(".spcell");
+  if (!cell || e.button > 0 || spDrag) return;
+  if (e.pointerType === "mouse") e.preventDefault();
+  spDragged = false;
+  const p = spPending = { cell, x: e.clientX, y: e.clientY, touch: e.pointerType !== "mouse" };
+  if (p.touch) p.timer = setTimeout(() => { if (spPending === p) spBegin(p, p.x, p.y); }, 300);
+});
+addEventListener("pointermove", e => {
+  if (spDrag){ spMove(e.clientX, e.clientY); return; }
+  if (!spPending) return;
+  if (Math.hypot(e.clientX - spPending.x, e.clientY - spPending.y) > 6){
+    if (spPending.touch){ clearTimeout(spPending.timer); spPending = null; }
+    else spBegin(spPending, e.clientX, e.clientY);
+  }
+});
+addEventListener("pointerup", () => { if (spPending){ clearTimeout(spPending.timer); spPending = null; } if (spDrag) spEnd(); });
+addEventListener("pointercancel", () => { if (spPending){ clearTimeout(spPending.timer); spPending = null; } if (spDrag) spEnd(); });
+function spBegin(p, x, y){
+  spPending = null; spDragged = true;
+  const r = p.cell.getBoundingClientRect(), ghost = p.cell.cloneNode(true);
+  ghost.className = "spghost"; ghost.style.width = r.width + "px";
+  document.body.appendChild(ghost);
+  p.cell.classList.add("placeholder");
+  spDrag = { cell: p.cell, ghost, dx: x - r.left, dy: y - r.top, row: p.cell.parentElement };
+  spMove(x, y);
+}
+function spMove(x, y){
+  const d = spDrag;
+  d.ghost.style.left = x - d.dx + "px"; d.ghost.style.top = y - d.dy + "px";
+  // the album slides in before the first one whose middle is to the right of the pointer
+  const rest = [...d.row.children].filter(c => c !== d.cell);
+  const before = rest.find(c => { const r = c.getBoundingClientRect(); return x < r.left + r.width / 2; });
+  if (before ? d.cell.nextElementSibling !== before : d.row.lastElementChild !== d.cell) d.row.insertBefore(d.cell, before || null);
+  // near either end of the row, scroll it along
+  const rr = d.row.getBoundingClientRect();
+  if (x < rr.left + 40) d.row.scrollLeft -= 12; else if (x > rr.right - 40) d.row.scrollLeft += 12;
+}
+function spEnd(){
+  const d = spDrag; spDrag = null;
+  d.ghost.remove(); d.cell.classList.remove("placeholder");
+  const order = [...d.row.children].map(c => c.dataset.id);
+  const before = spq.groups.map(g => g.id).join();
+  spq.groups.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  if (spq.groups.map(g => g.id).join() !== before){ spq.dirty = true; spqMsg = ""; }
+  renderSpotifyQueue();
+  setTimeout(() => { spDragged = false; }, 0);
+}
+async function syncSpotifyQueue(btn){
+  if (!spq?.dirty) return;
+  btn.disabled = true; btn.textContent = "Syncing…";
+  try {
+    const player = await api("/me/player").catch(() => null);
+    const device = player?.device?.id;
+    if (!device) throw new Error("Play Something In Spotify First");
+    const now = player.item?.uri || spq.now.uri;
+    const uris = [now, ...spq.groups.flatMap(g => g.tracks.map(t => t.uri))];
+    // 1. the new order goes into your private "Up Next" playlist
+    let pid = await queuePlaylist("Up Next", "spotifyUpNextPlaylist", "What the iPod's Queue tab sent to play next");
+    let r = await spotifySend("PUT", `/playlists/${pid}/items`, { uris: uris.slice(0, 100) });
+    if (r.status === 404){ LS.del("spotifyUpNextPlaylist"); pid = await queuePlaylist("Up Next", "spotifyUpNextPlaylist", "What the iPod's Queue tab sent to play next"); r = await spotifySend("PUT", `/playlists/${pid}/items`, { uris: uris.slice(0, 100) }); }
+    if (!r.ok) throw new Error("Spotify Didn't Take It");
+    for (let k = 100; k < uris.length; k += 100)
+      if (!(await spotifySend("POST", `/playlists/${pid}/items`, { uris: uris.slice(k, k + 100) })).ok) throw new Error("Spotify Didn't Take It");
+    // 2. step past everything Spotify had waiting, since it won't let us take those out
+    const waiting = ((await api("/me/player/queue")).queue || []).length;
+    for (let i = 0; i < waiting; i++) await spotifySend("POST", "/me/player/next?device_id=" + device);
+    // 3. play the playlist from the song you were on, where you were in it
+    r = await spotifySend("PUT", "/me/player/play?device_id=" + device,
+      { context_uri: "spotify:playlist:" + pid, offset: { position: 0 }, position_ms: player.progress_ms || 0 });
+    if (!r.ok) throw new Error("Spotify Didn't Start Playing");
+    spqMsg = "Synced ✓"; spq.dirty = false; renderSpotifyQueue();
+    setTimeout(() => { spqMsg = ""; if (!spq?.dirty) loadSpotifyQueue(); }, 1500);
+  } catch(err){ spqMsg = err.message || "Spotify Didn't Answer"; renderSpotifyQueue(); }
+}
 
 // The Spotify version of a Discogs record, so the Pantheon shows clean Spotify art instead of a
 // photo of the sleeve. Remembered per record (null when Spotify doesn't have it).
