@@ -134,7 +134,7 @@ body.decade-view{overflow:hidden}
 .qhead{display:flex;align-items:center;gap:10px;margin:10px 2px 8px;min-height:28px}
 .qhead h3{margin:0;font:700 12px/1 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .qrow{display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;padding-bottom:6px;scrollbar-width:thin}
-.qrow > .qtile,.qrow > .spcell{flex:0 0 160px}
+.qrow > .qtile,.qrow > .spcell{flex:0 0 160px;width:160px;min-width:0} /* every tile in both rows the same size, however long its caption */
 .spcell{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .spcell.placeholder{opacity:.15}
 .spcell.open .qtile{outline:2px solid #1DB954;outline-offset:-2px}
@@ -1156,29 +1156,46 @@ function spEnd(){
 async function syncSpotifyQueue(btn){
   if (!spq?.dirty) return;
   btn.disabled = true; btn.textContent = "Syncing…";
-  try {
-    const player = await api("/me/player").catch(() => null);
-    const device = player?.device?.id;
-    if (!device) throw new Error("Play Something In Spotify First");
-    const now = player.item?.uri || spq.now.uri;
-    const uris = [now, ...spq.groups.flatMap(g => g.tracks.map(t => t.uri))];
-    // 1. the new order goes into your private "Up Next" playlist
-    let pid = await queuePlaylist("Up Next", "spotifyUpNextPlaylist", "What the iPod's Queue tab sent to play next");
-    let r = await spotifySend("PUT", `/playlists/${pid}/items`, { uris: uris.slice(0, 100) });
-    if (r.status === 404){ LS.del("spotifyUpNextPlaylist"); pid = await queuePlaylist("Up Next", "spotifyUpNextPlaylist", "What the iPod's Queue tab sent to play next"); r = await spotifySend("PUT", `/playlists/${pid}/items`, { uris: uris.slice(0, 100) }); }
+  const pid = () => queuePlaylist("Up Next", "spotifyUpNextPlaylist", "What the iPod's Queue tab sent to play next");
+  const write = async (id, uris) => {
+    let r = await spotifySend("PUT", `/playlists/${id}/items`, { uris: uris.slice(0, 100) });
+    if (r.status === 404){ LS.del("spotifyUpNextPlaylist"); id = await pid(); r = await spotifySend("PUT", `/playlists/${id}/items`, { uris: uris.slice(0, 100) }); } // it was deleted: make a new one
     if (!r.ok) throw new Error("Spotify Didn't Take It");
     for (let k = 100; k < uris.length; k += 100)
-      if (!(await spotifySend("POST", `/playlists/${pid}/items`, { uris: uris.slice(k, k + 100) })).ok) throw new Error("Spotify Didn't Take It");
-    // 2. step past everything Spotify had waiting, since it won't let us take those out
-    const waiting = ((await api("/me/player/queue")).queue || []).length;
+      if (!(await spotifySend("POST", `/playlists/${id}/items`, { uris: uris.slice(k, k + 100) })).ok) throw new Error("Spotify Didn't Take It");
+    return id;
+  };
+  let device = null, volume = null;
+  try {
+    const player = await api("/me/player").catch(() => null);
+    device = player?.device?.id;
+    if (!device) throw new Error("Play Something In Spotify First");
+    const rest = spq.groups.flatMap(g => g.tracks.map(t => t.uri));
+    // 1. the new order goes into your private "Up Next" playlist, while you keep listening
+    let list = await write(await pid(), [player.item?.uri || spq.now.uri, ...rest]);
+    // 2. the switch-over happens in one quiet moment: Spotify won't let us take songs out of its
+    //    queue, so it's paused and muted while we step past them, then picks up where you were
+    const at = await api("/me/player");
+    if (at?.item?.uri && at.item.uri !== player.item?.uri) list = await write(list, [at.item.uri, ...rest]); // the song changed meanwhile
+    const pos = at?.progress_ms || 0, waiting = ((await api("/me/player/queue")).queue || []).length;
+    if (at?.device?.supports_volume !== false && at?.device?.volume_percent != null){
+      volume = at.device.volume_percent;
+      await spotifySend("PUT", `/me/player/volume?volume_percent=0&device_id=${device}`);
+    }
+    if (at?.is_playing) await spotifySend("PUT", "/me/player/pause?device_id=" + device);
     for (let i = 0; i < waiting; i++) await spotifySend("POST", "/me/player/next?device_id=" + device);
-    // 3. play the playlist from the song you were on, where you were in it
-    r = await spotifySend("PUT", "/me/player/play?device_id=" + device,
-      { context_uri: "spotify:playlist:" + pid, offset: { position: 0 }, position_ms: player.progress_ms || 0 });
+    const r = await spotifySend("PUT", "/me/player/play?device_id=" + device,
+      { context_uri: "spotify:playlist:" + list, offset: { position: 0 }, position_ms: pos });
     if (!r.ok) throw new Error("Spotify Didn't Start Playing");
-    spqMsg = "Synced ✓"; spq.dirty = false; renderSpotifyQueue();
-    setTimeout(() => { spqMsg = ""; if (!spq?.dirty) loadSpotifyQueue(); }, 1500);
-  } catch(err){ spqMsg = err.message || "Spotify Didn't Answer"; renderSpotifyQueue(); }
+    if (!at?.is_playing) await spotifySend("PUT", "/me/player/pause?device_id=" + device); // you were paused: stay paused
+    spqMsg = "Synced ✓"; spq.dirty = false;
+  } catch(err){ spqMsg = err.message || "Spotify Didn't Answer"; }
+  finally {
+    // the sound always comes back, whatever happened
+    if (volume != null){ await sleep(400); await spotifySend("PUT", `/me/player/volume?volume_percent=${volume}&device_id=${device}`).catch(() => {}); }
+  }
+  renderSpotifyQueue();
+  if (!spq.dirty) setTimeout(() => { spqMsg = ""; if (!spq?.dirty) loadSpotifyQueue(); }, 1500);
 }
 
 // The Spotify version of a Discogs record, so the Pantheon shows clean Spotify art instead of a
