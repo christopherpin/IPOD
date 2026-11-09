@@ -710,9 +710,20 @@ async function renderBrowsed(){
   if (!browsedList){
     try { const r = await fetch("browsed.json", { cache: "no-cache" }); browsedList = r.ok ? await r.json() : []; }
     catch { browsedList = []; }
+    // covers come from each album's Spotify version (or Discogs when Spotify lacks it), all found before anything is drawn
+    await Promise.all(browsedList.filter(r => !r.src).map(async r => {
+      r.src = (await spotifyFor(browsedItem(r)).catch(() => null))?.src || await discogsCover(r).catch(() => null);
+    }));
+    browsedList = browsedList.filter(r => r.src);
     if (!$("#browsed").childElementCount) fillGrid($("#browsed"), browsedList.map(browsedItem));
   }
   $("#browsedNone").classList.toggle("hidden", !(view === "wax" && waxMode === "browsed" && !browsedList.length));
+}
+async function discogsCover(r){
+  const q = new URLSearchParams({ type: "master", release_title: r.name, artist: r.artist });
+  const j = await (await fetch("https://api.discogs.com/database/search?" + q + "&" + DISCOGS)).json();
+  const hit = (j.results || []).find(x => x.cover_image && !/spacer\.gif/.test(x.cover_image));
+  return hit ? hit.cover_image : null;
 }
 // in the shape a Wax record has, so the menu finds its Spotify version the same way
 const browsedItem = r => ({ id: "br:" + norm(r.name + " " + r.artist), wax: true, album: r.name, artist: r.artist, year: r.year, src: r.src,
