@@ -31,6 +31,10 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-
 .views button.on{color:var(--rank);background:#000;font-size:14px;font-weight:700}
 /* Wax showing the albums you browsed but didn't buy: its tab turns white instead of yellow */
 .views button.on.browsing{color:#fff}
+/* where shop photos are dropped (or tapped to pick, on a phone), above the browsed albums */
+.bdrop{display:flex;align-items:center;justify-content:center;margin:4px 4px 0;height:56px;border:1px dashed rgba(255,255,255,.25);border-radius:8px;
+  color:var(--muted);font:600 12px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center;padding:0 12px;cursor:pointer}
+.bdrop.over{border-color:var(--rank);color:var(--rank)}
 /* iPod sits in the middle and is always bigger than the rest */
 /* thin white lines between the groups: Queue | Discover Lineage Decades | iPod Wall Wax | Pantheon */
 .views .sep{flex:0 0 1px;align-self:stretch;margin:7px 3px;background:rgba(255,255,255,.7)}
@@ -180,8 +184,10 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 <main class="decades hidden" id="decades"></main>
 <main class="pantheon hidden" id="pantheon"></main>
 <main class="wall hidden" id="wax"></main>
-<main class="wall hidden" id="browsed"></main>
-<p class="empty hidden" id="browsedNone">No browsed albums yet</p>
+<main class="hidden" id="browsed">
+  <label class="bdrop" id="bdrop"><input type="file" id="bfile" accept="image/*" multiple hidden><span id="bdropText">Drop photos of albums here</span></label>
+  <div class="wall" id="browsedGrid"></div>
+</main>
 <main class="queue hidden" id="queue">
   <div class="qbar"><input id="qsearch" type="search" placeholder="Search for an album" autocomplete="off" spellcheck="false"></div>
   <div id="qbody"></div>
@@ -267,6 +273,7 @@ body:not(.ipod-view) .sharebtn,body:not(.ipod-view) .sharebox{display:none}
 <script src="wiki.js?v=2026-10-04h"></script>
 <script src="discover.js?v=2026-10-04h"></script>
 <script src="lineage.js?v=2026-10-04h"></script>
+<script src="browsed.js?v=2026-11-09"></script>
 <script>
 "use strict";
 const LS = {
@@ -704,21 +711,62 @@ async function renderWax(){
   } catch(e){ if (view === "wax" && waxMode !== "browsed") setup(e.message); }
   finally { $("#loading").classList.add("hidden"); }
 }
-/* albums you browsed in shops but didn't buy, named from your photos (browsed.json); double-click Wax to switch */
+/* albums you browsed in shops but didn't buy, named from your photos; double-click Wax to switch.
+   Albums read from photos dropped here are kept in this browser (wax.browsed); browsed.json can list more. */
 let waxMode = LS.get("wax.mode") === "browsed" ? "browsed" : "owned", browsedList = null;
+const coverFor = async r => (await spotifyFor(browsedItem(r)).catch(() => null))?.src || await discogsCover(r).catch(() => null);
+function browsedAll(){
+  const seen = new Set();
+  return [...LS.get("wax.browsed", []), ...(browsedList || [])].filter(r => { const k = browsedItem(r).id; return !seen.has(k) && seen.add(k); });
+}
 async function renderBrowsed(){
   if (!browsedList){
     try { const r = await fetch("browsed.json", { cache: "no-cache" }); browsedList = r.ok ? await r.json() : []; }
     catch { browsedList = []; }
     // covers come from each album's Spotify version (or Discogs when Spotify lacks it), all found before anything is drawn
-    await Promise.all(browsedList.filter(r => !r.src).map(async r => {
-      r.src = (await spotifyFor(browsedItem(r)).catch(() => null))?.src || await discogsCover(r).catch(() => null);
-    }));
+    await Promise.all(browsedList.filter(r => !r.src).map(async r => { r.src = await coverFor(r); }));
     browsedList = browsedList.filter(r => r.src);
-    if (!$("#browsed").childElementCount) fillGrid($("#browsed"), browsedList.map(browsedItem));
+    fillGrid($("#browsedGrid"), browsedAll().map(browsedItem));
+    binNote();
   }
-  $("#browsedNone").classList.toggle("hidden", !(view === "wax" && waxMode === "browsed" && !browsedList.length));
 }
+async function binNote(msg){
+  const n = await Browsed.emptyOld();
+  $("#bdropText").textContent = msg || "Drop photos of albums here" +
+    (n ? ` · ${n} photo${n > 1 ? "s" : ""} in the bin, deleted after ${Browsed.BIN_DAYS} days` : "");
+}
+// each photo is shrunk, read by Gemini and put in the bin; the albums it shows join the grid all at once at the end
+let reading = false, waiting = [];
+async function readPhotos(files){
+  waiting.push(...[...files].filter(f => /^image\//.test(f.type)));
+  if (reading || !waiting.length) return;
+  const key = LS.get("gemini.key");
+  if (!key) return aiSetup("Reading your photos needs a Gemini key.");
+  reading = true;
+  const added = [], missed = [];
+  try {
+    while (waiting.length){
+      const f = waiting.shift();
+      binNote(`Reading ${added.length + missed.length + 1} of ${added.length + missed.length + 1 + waiting.length}…`);
+      let photo = null, found = [];
+      try { photo = await Browsed.shrink(f); found = await Browsed.identify(photo, key); }
+      catch(e){ if (e.kind === "key"){ LS.del("gemini.key"); waiting.unshift(f); reading = false; return aiSetup(e.message); } }
+      if (photo) await Browsed.toBin(photo, found);
+      if (!found.length){ missed.push(f.name); continue; }
+      for (const r of found){ r.src = await coverFor(r); if (r.src) added.push({ ...r, at: Date.now() }); else missed.push(r.name); }
+    }
+  } finally { reading = false; }
+  const have = new Set(browsedAll().map(r => browsedItem(r).id));
+  const fresh = added.filter(r => !have.has(browsedItem(r).id) && have.add(browsedItem(r).id));
+  if (fresh.length){ LS.set("wax.browsed", [...fresh, ...LS.get("wax.browsed", [])]); fillGrid($("#browsedGrid"), browsedAll().map(browsedItem)); }
+  binNote(missed.length ? `Couldn't make out ${missed.length} ${missed.length > 1 ? "albums" : "album"}. Drop more photos here` : "");
+}
+const bdrop = $("#bdrop");
+$("#bfile").onchange = e => { readPhotos(e.target.files); e.target.value = ""; };
+// photos can be dropped anywhere on the browsed albums, not only on the strip
+$("#browsed").addEventListener("dragover", e => { if ([...e.dataTransfer.types].includes("Files")){ e.preventDefault(); bdrop.classList.add("over"); } });
+$("#browsed").addEventListener("dragleave", e => { if (!$("#browsed").contains(e.relatedTarget)) bdrop.classList.remove("over"); });
+$("#browsed").addEventListener("drop", e => { e.preventDefault(); bdrop.classList.remove("over"); readPhotos(e.dataTransfer.files); });
 async function discogsCover(r){
   const q = new URLSearchParams({ type: "master", release_title: r.name, artist: r.artist });
   const j = await (await fetch("https://api.discogs.com/database/search?" + q + "&" + DISCOGS)).json();
@@ -733,8 +781,8 @@ function showWaxMode(){
   $("#wax").classList.toggle("hidden", !on || b);
   $("#browsed").classList.toggle("hidden", !on || !b);
   $('#views [data-view="wax"]').classList.toggle("browsing", b);
-  if (!on){ $("#browsedNone").classList.add("hidden"); return; }
-  if (b){ $("#waxSetup").classList.add("hidden"); renderBrowsed(); } else { $("#browsedNone").classList.add("hidden"); renderWax(); }
+  if (!on) return;
+  if (b){ $("#waxSetup").classList.add("hidden"); renderBrowsed(); } else renderWax();
 }
 $("#waxForm").onsubmit = e => {
   e.preventDefault();
@@ -1528,6 +1576,7 @@ $("#aiForm").onsubmit = e => {
   if (!k) return;
   LS.set("gemini.key", k); $("#aiSetup").classList.add("hidden");
   if (view === "lineage") renderLineage();
+  if (waiting.length) readPhotos([]); // photos dropped before there was a key
 };
 $("#aiSetup").addEventListener("click", e => { if (e.target.id === "aiSetup") e.target.classList.add("hidden"); });
 addEventListener("keydown", e => { if (e.key === "Escape") $("#aiSetup").classList.add("hidden"); });
@@ -2025,7 +2074,7 @@ document.addEventListener("contextmenu", e => {
   // a Wax record stands in for its Spotify version, which is looked up straight away
   // so does an album in Discover's row
   const rec = tile.closest("#wax") && (LS.get(WAX)?.list || []).find(r => r.id === tile.dataset.id)
-    || tile.closest("#browsed") && (browsedList || []).map(browsedItem).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i)
+    || tile.closest("#browsed") && browsedAll().map(browsedItem).find(r => r.id === tile.dataset.id) || tile.closest("#discover") && discoverItem(+tile.dataset.i)
     || tile.closest("#lineage") && lineageItem(tile.dataset.list, +tile.dataset.i);
   if (rec) rec.wax = true;
   const album = rec || (tile.closest("#pantheon, #ipod") ? byAnyId(tile.dataset.id) : albums.find(a => a.id === tile.dataset.id));
